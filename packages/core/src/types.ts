@@ -22,6 +22,8 @@ export interface ChatMessage {
   toolCalls?: ToolCall[];
   toolCallId?: string;
   timestamp: number;
+  /** Attachments for multimodal messages (images, files, PDFs). */
+  attachments?: Attachment[];
 }
 
 export interface ToolCall {
@@ -177,9 +179,11 @@ export interface StreamToken {
 export interface Attachment {
   id: string;
   name: string;
-  type: 'file' | 'image';
+  type: 'file' | 'image' | 'pdf';
   content: string;
   dataUri?: string;
+  /** MIME type for images (e.g., 'image/png', 'image/jpeg') */
+  mimeType?: string;
 }
 
 // ── Chat Sessions ──
@@ -250,7 +254,7 @@ export type ExtensionMessage =
   | { type: 'askUser'; id: string; prompt: string; options?: AskUserOptionInput[]; multiSelect?: boolean }
   | { type: 'filePicked'; path: string; content: string }
   | { type: 'workspaceFilesResult'; files: string[] }
-  | { type: 'settingsLoaded'; securityLevel: string; archiveEnabled: boolean; modelPool: string[]; hasBraveApiKey: boolean; webSearchEnabled: boolean }
+  | { type: 'settingsLoaded'; securityLevel: string; archiveEnabled: boolean; modelPool: string[]; hasBraveApiKey: boolean; webSearchEnabled: boolean; activeProvider: string }
   | { type: 'chatSessionsLoaded'; sessions: ChatSessionSummary[] }
   | { type: 'chatSessionLoaded'; session: ChatSession }
   | { type: 'benchmarksLoaded'; sources: BenchmarkSource[] }
@@ -280,7 +284,18 @@ export type ExtensionMessage =
   | { type: 'conversationSkillGenerated'; skill: { name: string; description: string; tags: string[]; content: string } }
   // Todos
   | { type: 'todosUpdated'; title?: string; todos: TodoItem[] }
-  | { type: 'todosTurnComplete'; summary: TodoSummary };
+  | { type: 'todosTurnComplete'; summary: TodoSummary }
+  // Providers
+  | { type: 'providersLoaded'; providers: ProviderInfo[] }
+  | { type: 'providerChanged'; providerId: string }
+  | { type: 'providerStatus'; providerId: string; available: boolean; error?: string }
+  | { type: 'claudeCliStatusResult'; installed: boolean; authenticated: boolean; version?: string; error?: string };
+
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  available: boolean;
+}
 
 export interface ParallelBranchInfo {
   branchId: string;
@@ -348,7 +363,12 @@ export type WebviewMessage =
   | { type: 'loadSkillVersionContent'; skillName: string; versionPath: string; version: number }
   | { type: 'restoreSkillVersion'; skillName: string; versionPath: string }
   | { type: 'generateSkillFromConversation' }
-  | { type: 'loadSkillContent'; skillName: string };
+  | { type: 'loadSkillContent'; skillName: string }
+  // Providers
+  | { type: 'selectProvider'; providerId: string }
+  | { type: 'loadProviders' }
+  | { type: 'setClaudeCliPath'; path: string }
+  | { type: 'setMcpConfigPath'; path: string };
 
 export interface PipelineGraphData {
   id: string;

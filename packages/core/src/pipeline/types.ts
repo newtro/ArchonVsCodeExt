@@ -48,6 +48,7 @@ export interface AgentNodeConfig {
   tools?: string[];        // Tool names available to this agent; undefined = all
   maxIterations?: number;
   inheritContext?: boolean; // Whether to inherit conversation history from prior nodes
+  provider?: string;       // Provider override: 'openrouter' | 'claude-cli' | undefined (use active)
 }
 
 export interface ToolNodeConfig {

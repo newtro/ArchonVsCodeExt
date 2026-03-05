@@ -40,6 +40,15 @@ export type {
   SkillEvent, SkillEventType, SkillLoaderConfig, SkillExecutorConfig,
 } from './skills/types';
 
+// Providers
+export { OpenRouterProvider } from './providers/openrouter-provider';
+export { ClaudeCliProvider } from './providers/claude-cli-provider';
+export type { ClaudeCliConfig } from './providers/claude-cli-provider';
+export { ProviderManager } from './providers/provider-manager';
+export { detectClaudeCli } from './providers/claude-cli-detector';
+export type { ClaudeCliStatus } from './providers/claude-cli-detector';
+export type { LLMProvider, ProviderId, ExecutorConfig, Executor, ExecutorCallbacks, ExecutionEvent, TokenUsage } from './providers/types';
+
 // Security
 export { SecurityManager } from './security/security-manager';
 export type { SecurityLevel, SecurityConfig, CommandCategory } from './security/security-manager';
