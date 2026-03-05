@@ -10,6 +10,7 @@ export function getBuiltInTemplates(): PipelineTemplate[] {
     planAndExecute,
     tddWorkflow,
     codeReview,
+    smartRouting,
   ];
 }
 
@@ -28,7 +29,7 @@ const simpleChat: PipelineTemplate = {
         label: 'Chat Agent',
         config: {
           type: 'agent',
-          maxIterations: 25,
+
         },
         position: { x: 200, y: 100 },
         status: 'idle',
@@ -55,7 +56,6 @@ const planAndExecute: PipelineTemplate = {
         config: {
           type: 'agent',
           systemPrompt: 'You are an architect. Analyze the task and create a detailed plan. List files to modify, changes needed, and potential risks. Do NOT write code.',
-          maxIterations: 5,
         },
         position: { x: 100, y: 100 },
         status: 'idle',
@@ -78,7 +78,7 @@ const planAndExecute: PipelineTemplate = {
         config: {
           type: 'agent',
           systemPrompt: 'You are a precise code editor. Implement the plan from the architect exactly as specified. Use edit_file for surgical edits.',
-          maxIterations: 25,
+
         },
         position: { x: 500, y: 100 },
         status: 'idle',
@@ -103,7 +103,6 @@ const planAndExecute: PipelineTemplate = {
         config: {
           type: 'agent',
           systemPrompt: 'Fix the errors reported by the LSP diagnostics. Focus only on fixing errors, do not refactor.',
-          maxIterations: 10,
         },
         position: { x: 700, y: 250 },
         status: 'idle',
@@ -137,7 +136,6 @@ const tddWorkflow: PipelineTemplate = {
         config: {
           type: 'agent',
           systemPrompt: 'Write a failing test for the requested feature. Do NOT implement the feature itself.',
-          maxIterations: 10,
         },
         position: { x: 100, y: 100 },
         status: 'idle',
@@ -149,7 +147,6 @@ const tddWorkflow: PipelineTemplate = {
         config: {
           type: 'agent',
           systemPrompt: 'Implement the minimum code needed to make the tests pass.',
-          maxIterations: 15,
         },
         position: { x: 300, y: 100 },
         status: 'idle',
@@ -174,7 +171,6 @@ const tddWorkflow: PipelineTemplate = {
         config: {
           type: 'agent',
           systemPrompt: 'Fix the code to make the failing tests pass. Only modify implementation, not tests.',
-          maxIterations: 10,
         },
         position: { x: 500, y: 250 },
         status: 'idle',
@@ -194,39 +190,95 @@ const tddWorkflow: PipelineTemplate = {
 const codeReview: PipelineTemplate = {
   id: 'code-review',
   name: 'Code Review',
-  description: 'Read files → analyze → generate review → user checkpoint.',
+  description: 'Fetches PR diff, analyzes code changes, and presents a structured review.',
   category: 'Review',
   pipeline: {
     id: 'code-review-pipeline',
     name: 'Code Review',
     nodes: [
       {
-        id: 'analyzer',
+        id: 'reviewer',
         type: 'agent',
-        label: 'Code Analyzer',
+        label: 'Code Reviewer',
         config: {
           type: 'agent',
-          systemPrompt: 'Analyze the code thoroughly. Look for bugs, security issues, performance problems, code style violations, and architectural concerns. Provide a structured review.',
-          maxIterations: 15,
+          systemPrompt: `You are a code reviewer. Your job is to review a pull request and present findings to the user.
+
+## Workflow
+1. **Gather the PR diff** — Use the tools available (e.g., az CLI, git, or gh) to fetch the PR metadata and the actual changed files. Try multiple approaches if one doesn't work.
+2. **Analyze** — Review the code changes for bugs, security issues, performance problems, style concerns, and missing error handling.
+3. **Present findings** — You MUST produce a structured review as your final output:
+
+### PR Review: [title]
+**Files changed:** [list]
+
+#### Findings
+- **[Critical/Warning/Info]** [file:line] — Description and suggested fix.
+
+#### Summary
+Overall assessment and recommendation (approve, request changes, or comment).
+
+IMPORTANT: Do NOT end your turn without presenting your review findings. If you cannot fetch the diff, ask the user for help rather than stopping silently. If the user sends follow-up messages (corrections, questions, requests to post comments), address them and continue working.`,
         },
         position: { x: 200, y: 100 },
         status: 'idle',
       },
+    ],
+    edges: [],
+    entryNodeId: 'reviewer',
+  },
+};
+
+const smartRouting: PipelineTemplate = {
+  id: 'smart-routing',
+  name: 'Smart Routing',
+  description: 'Analyzes task complexity and routes to the appropriate model — fast for simple tasks, powerful for complex ones.',
+  category: 'Advanced',
+  pipeline: {
+    id: 'smart-routing-pipeline',
+    name: 'Smart Routing',
+    nodes: [
       {
-        id: 'checkpoint',
-        type: 'user_checkpoint',
-        label: 'Review Results',
+        id: 'classifier',
+        type: 'decision_gate',
+        label: 'Complexity Analyzer',
         config: {
-          type: 'user_checkpoint',
-          prompt: 'Review the analysis. Apply suggested fixes?',
+          type: 'decision_gate',
+          condition: 'Is this task complex enough to require deep reasoning (architectural changes, multi-file refactoring, or debugging subtle bugs)? Simple tasks include: quick lookups, single-line fixes, formatting, renaming.',
+          mode: 'ai_evaluated',
+          trueEdge: 'route-complex',
+          falseEdge: 'route-simple',
         },
-        position: { x: 450, y: 100 },
+        position: { x: 200, y: 150 },
+        status: 'idle',
+      },
+      {
+        id: 'fast-agent',
+        type: 'agent',
+        label: 'Fast Agent',
+        config: {
+          type: 'agent',
+          model: 'pool:fast',
+        },
+        position: { x: 450, y: 80 },
+        status: 'idle',
+      },
+      {
+        id: 'reasoning-agent',
+        type: 'agent',
+        label: 'Reasoning Agent',
+        config: {
+          type: 'agent',
+          model: 'pool:architect',
+        },
+        position: { x: 450, y: 220 },
         status: 'idle',
       },
     ],
     edges: [
-      { id: 'analyze-to-review', sourceNodeId: 'analyzer', targetNodeId: 'checkpoint' },
+      { id: 'route-simple', sourceNodeId: 'classifier', targetNodeId: 'fast-agent', label: 'Simple' },
+      { id: 'route-complex', sourceNodeId: 'classifier', targetNodeId: 'reasoning-agent', label: 'Complex' },
     ],
-    entryNodeId: 'analyzer',
+    entryNodeId: 'classifier',
   },
 };

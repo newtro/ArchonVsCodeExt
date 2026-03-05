@@ -102,6 +102,32 @@ export class OpenRouterClient {
   }
 
   /**
+   * Non-streaming chat completion — returns the full response text.
+   */
+  async simpleChat(
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    temperature?: number,
+  ): Promise<string> {
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+        'HTTP-Referer': 'https://archon.dev',
+        'X-Title': 'Archon VS Code Extension',
+      },
+      body: JSON.stringify({ model, messages, temperature }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OpenRouter error ${res.status}: ${errText}`);
+    }
+    const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    return data.choices?.[0]?.message?.content ?? '';
+  }
+
+  /**
    * Stream a chat completion from OpenRouter.
    */
   async *streamChat(

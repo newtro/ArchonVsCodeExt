@@ -11,19 +11,33 @@ import type { NetworkRequestUI } from './components/NetworkMonitorPanel';
 import { BenchmarkDashboard } from './components/BenchmarkDashboard';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ChatHistoryDropdown } from './components/ChatHistoryDropdown';
+import { ParallelBranchGroup } from './components/ParallelBranchGroup';
 import { PlusIcon, ClipboardIcon, RefreshIcon } from './components/Icons';
-import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource } from '@archon/core';
+import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo } from '@archon/core';
 
 type Tab = 'chat' | 'pipeline' | 'network' | 'benchmarks' | 'settings';
+
+/** All tool names available in the extension (core + LSP + extended). */
+const AVAILABLE_TOOLS = [
+  'read_file', 'write_file', 'edit_file', 'search_files', 'find_files',
+  'list_directory', 'run_terminal', 'ask_user', 'attempt_completion',
+  'go_to_definition', 'find_references', 'get_hover_info',
+  'get_workspace_symbols', 'get_document_symbols', 'get_code_actions', 'get_diagnostics',
+  'web_search', 'web_fetch', 'lookup_docs', 'search_codebase',
+  'search_history', 'spawn_agent', 'diff_view', 'tool_search',
+];
 
 export function App() {
   const {
     messages, isLoading, streamingContent, selectedModelId, models,
     askUserRequest, error, attachments, workspaceFiles, chatSessions,
+    parallelGroup, completedParallelGroups,
     addMessage, updateToolMessage, appendStreamingContent, finalizeAssistantMessage,
     setLoading, setModels, setSelectedModel, setAskUser, setError, clearMessages,
     addAttachment, removeAttachment, clearAttachments, setWorkspaceFiles,
     setChatSessions, setMessages,
+    startParallelGroup, appendBranchStreamingContent, finalizeBranchAssistantMessage,
+    addBranchMessage, updateBranchToolMessage, completeBranch, setBranchError, completeParallelGroup,
   } = useChatStore();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -34,6 +48,12 @@ export function App() {
   const [pipelineNodes, setPipelineNodes] = useState<EditorNode[]>([]);
   const [pipelineEdges, setPipelineEdges] = useState<EditorEdge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  // Pipeline selector state
+  const [availablePipelines, setAvailablePipelines] = useState<PipelineInfo[]>([]);
+  const [selectedPipelineId, setSelectedPipelineId] = useState('default');
+  const [pipelinesLoaded, setPipelinesLoaded] = useState(false);
+  const [enhancingNodeId, setEnhancingNodeId] = useState<string | null>(null);
 
   // Network monitor state
   const [networkRequests, setNetworkRequests] = useState<NetworkRequestUI[]>([]);
@@ -67,40 +87,90 @@ export function App() {
       switch (msg.type) {
         case 'streamToken':
           if (msg.token.type === 'text' && msg.token.content) {
-            appendStreamingContent(msg.token.content);
+            if (msg.branchId) {
+              appendBranchStreamingContent(msg.branchId, msg.token.content);
+            } else {
+              appendStreamingContent(msg.token.content);
+            }
           } else if (msg.token.type === 'error') {
-            setError(msg.token.error ?? 'Unknown error');
-            setLoading(false);
+            const errMsg = msg.token.error ?? 'Unknown error';
+            if (msg.branchId) {
+              // Branch-scoped error — mark that branch, don't disrupt the global UI
+              setBranchError(msg.branchId, errMsg);
+            } else {
+              setError(errMsg);
+            }
+            // Don't clear loading — the pipeline may still be running
+            // (e.g., waiting for user retry/skip/abort or other branches).
           }
           break;
 
         case 'messageComplete':
           if (msg.message.role === 'assistant') {
-            finalizeAssistantMessage(msg.message.content);
+            if (msg.branchId) {
+              finalizeBranchAssistantMessage(msg.branchId, msg.message.content);
+            } else {
+              finalizeAssistantMessage(msg.message.content);
+            }
           }
           // Auto-save session after each completed message
           saveCurrentSession();
           break;
 
         case 'toolCallStart':
-          addMessage({
-            id: msg.toolCall.id,
-            role: 'tool',
-            content: '',
-            toolName: msg.toolCall.name,
-            toolCallId: msg.toolCall.id,
-            toolArgs: msg.toolCall.arguments,
-            toolStatus: 'running',
-            timestamp: Date.now(),
-          });
+          if (msg.branchId) {
+            addBranchMessage(msg.branchId, {
+              id: msg.toolCall.id,
+              role: 'tool',
+              content: '',
+              toolName: msg.toolCall.name,
+              toolCallId: msg.toolCall.id,
+              toolArgs: msg.toolCall.arguments,
+              toolStatus: 'running',
+              timestamp: Date.now(),
+            });
+          } else {
+            addMessage({
+              id: msg.toolCall.id,
+              role: 'tool',
+              content: '',
+              toolName: msg.toolCall.name,
+              toolCallId: msg.toolCall.id,
+              toolArgs: msg.toolCall.arguments,
+              toolStatus: 'running',
+              timestamp: Date.now(),
+            });
+          }
           break;
 
         case 'toolCallResult':
-          updateToolMessage(msg.result.toolCallId, {
-            toolResult: msg.result.content,
-            toolStatus: msg.result.isError ? 'error' : 'done',
-            isError: msg.result.isError,
-          });
+          if (msg.branchId) {
+            updateBranchToolMessage(msg.branchId, msg.result.toolCallId, {
+              toolResult: msg.result.content,
+              toolStatus: msg.result.isError ? 'error' : 'done',
+              isError: msg.result.isError,
+              subMessages: msg.result.subMessages,
+            });
+          } else {
+            updateToolMessage(msg.result.toolCallId, {
+              toolResult: msg.result.content,
+              toolStatus: msg.result.isError ? 'error' : 'done',
+              isError: msg.result.isError,
+              subMessages: msg.result.subMessages,
+            });
+          }
+          break;
+
+        case 'parallelStart':
+          startParallelGroup(msg.branches);
+          break;
+
+        case 'parallelBranchComplete':
+          completeBranch(msg.branchId);
+          break;
+
+        case 'parallelComplete':
+          completeParallelGroup();
           break;
 
         case 'modelsLoaded':
@@ -113,11 +183,11 @@ export function App() {
 
         case 'error':
           setError(msg.error);
-          setLoading(false);
+          // Don't clear loading — 'agentLoopDone' handles that when the pipeline truly stops.
           break;
 
         case 'askUser':
-          setAskUser({ id: msg.id, prompt: msg.prompt, options: msg.options });
+          setAskUser({ id: msg.id, prompt: msg.prompt, options: msg.options, multiSelect: msg.multiSelect });
           break;
 
         case 'filePicked':
@@ -185,6 +255,61 @@ export function App() {
             error: msg.error,
           });
           break;
+
+        case 'pipelinesLoaded':
+          setAvailablePipelines(msg.pipelines);
+          setPipelinesLoaded(true);
+          break;
+
+        case 'pipelineChanged':
+          setSelectedPipelineId(msg.pipelineId);
+          break;
+
+        case 'pipelineNodeStatus':
+          setPipelineNodes(prev => prev.map(n =>
+            n.id === msg.nodeId ? { ...n, status: msg.status } : n
+          ));
+          break;
+
+        case 'pipelineSaved':
+          // Pipelines list will be refreshed by the extension host
+          break;
+
+        case 'pipelineDeleted':
+          if (selectedPipelineId === msg.pipelineId) {
+            setSelectedPipelineId('default');
+          }
+          break;
+
+        case 'pipelineGraphLoaded':
+          setPipelineNodes(msg.nodes.map(n => ({
+            id: n.id,
+            type: n.type,
+            label: n.label,
+            position: n.position,
+            status: n.status,
+            config: n.config,
+          })));
+          setPipelineEdges(msg.edges.map(e => ({
+            id: e.id,
+            sourceNodeId: e.sourceNodeId,
+            targetNodeId: e.targetNodeId,
+            label: e.label,
+          })));
+          setSelectedNodeId(null);
+          break;
+
+        case 'promptEnhanced':
+          setEnhancingNodeId(null);
+          setPipelineNodes(prev => prev.map(n =>
+            n.id === msg.nodeId ? { ...n, config: { ...n.config, systemPrompt: msg.enhanced } } : n
+          ));
+          break;
+
+        case 'promptEnhanceError':
+          setEnhancingNodeId(null);
+          setError(msg.error);
+          break;
       }
     });
 
@@ -193,6 +318,7 @@ export function App() {
       postMessage({ type: 'loadSettings' });
       postMessage({ type: 'searchWorkspaceFiles', query: '' });
       postMessage({ type: 'loadChatSessions' });
+      postMessage({ type: 'loadPipelines' });
       setIsFirstLoad(false);
     }
 
@@ -202,7 +328,14 @@ export function App() {
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, parallelGroup, completedParallelGroups]);
+
+  // Request pipeline graph data when pipeline tab opens or selection changes
+  useEffect(() => {
+    if (activeTab === 'pipeline') {
+      postMessage({ type: 'selectPipeline', pipelineId: selectedPipelineId });
+    }
+  }, [activeTab, selectedPipelineId]);
 
   // Auto-fetch benchmarks when switching to tab for the first time
   useEffect(() => {
@@ -314,23 +447,49 @@ export function App() {
 
   const [debugCopied, setDebugCopied] = useState(false);
 
+  const formatMessageForTranscript = (msg: typeof messages[0], lines: string[]) => {
+    const time = new Date(msg.timestamp).toISOString();
+    if (msg.role === 'user') {
+      lines.push(`## User [${time}]`, '', msg.content, '');
+    } else if (msg.role === 'assistant') {
+      lines.push(`## Assistant [${time}]`, '', msg.content, '');
+    } else if (msg.role === 'tool') {
+      const label = msg.toolName || 'tool';
+      const errorTag = msg.isError ? ' [ERROR]' : '';
+      const argsStr = msg.toolArgs ? '\n' + JSON.stringify(msg.toolArgs, null, 2) : '';
+      lines.push(`### Tool: ${label}${errorTag} [${time}]`, '', '```', `Calling: ${label}${argsStr}`, '```', '');
+      if (msg.toolResult) {
+        lines.push(`### Tool: ${label} [${time}]`, '', '```', msg.toolResult, '```', '');
+      }
+    }
+  };
+
+  const formatParallelGroupForTranscript = (group: typeof completedParallelGroups[0], lines: string[]) => {
+    lines.push(`## Parallel Execution (${group.branches.length} branches)`, '');
+    for (const branch of group.branches) {
+      lines.push(`### Branch: ${branch.label} [${branch.status}]`, '');
+      for (const msg of branch.messages) {
+        formatMessageForTranscript(msg, lines);
+      }
+      if (branch.streamingContent) {
+        lines.push(`## Assistant [streaming — ${branch.label}]`, '', branch.streamingContent, '');
+      }
+    }
+    lines.push('---', '');
+  };
+
   const handleCopyDebugTranscript = () => {
     const lines: string[] = ['# Chat Debug Transcript', ''];
     for (const msg of messages) {
-      const time = new Date(msg.timestamp).toISOString();
-      if (msg.role === 'user') {
-        lines.push(`## User [${time}]`, '', msg.content, '');
-      } else if (msg.role === 'assistant') {
-        lines.push(`## Assistant [${time}]`, '', msg.content, '');
-      } else if (msg.role === 'tool') {
-        const label = msg.toolName || 'tool';
-        const errorTag = msg.isError ? ' [ERROR]' : '';
-        const argsStr = msg.toolArgs ? '\n' + JSON.stringify(msg.toolArgs, null, 2) : '';
-        lines.push(`### Tool: ${label}${errorTag} [${time}]`, '', '```', `Calling: ${label}${argsStr}`, '```', '');
-        if (msg.toolResult) {
-          lines.push(`### Tool: ${label} [${time}]`, '', '```', msg.toolResult, '```', '');
-        }
-      }
+      formatMessageForTranscript(msg, lines);
+    }
+    // Include completed parallel groups
+    for (const group of completedParallelGroups) {
+      formatParallelGroupForTranscript(group, lines);
+    }
+    // Include active parallel group
+    if (parallelGroup) {
+      formatParallelGroupForTranscript(parallelGroup, lines);
     }
     if (streamingContent) {
       lines.push(`## Assistant [streaming]`, '', streamingContent, '');
@@ -348,14 +507,25 @@ export function App() {
 
   const handleNodeAdd = (type: string, position: { x: number; y: number }) => {
     const id = `node-${Math.random().toString(36).slice(2, 8)}`;
+    let config: Record<string, unknown> = { type };
+    if (type === 'join') {
+      config = { type, mergeStrategy: 'wait_all', failurePolicy: 'collect_partial' };
+    }
     setPipelineNodes(prev => [...prev, {
-      id, type, label: `${type.replace(/_/g, ' ')}`, position, status: 'idle', config: { type },
+      id, type, label: `${type.replace(/_/g, ' ')}`, position, status: 'idle', config,
     }]);
   };
 
-  const handleEdgeAdd = (sourceId: string, targetId: string) => {
+  const handleEdgeAdd = (sourceId: string, targetId: string, label?: string) => {
     const id = `edge-${Math.random().toString(36).slice(2, 8)}`;
-    setPipelineEdges(prev => [...prev, { id, sourceNodeId: sourceId, targetNodeId: targetId }]);
+    // Auto-label edges from parallel nodes
+    let edgeLabel = label;
+    const sourceNode = pipelineNodes.find(n => n.id === sourceId);
+    if (sourceNode?.type === 'parallel' && (!label || label === '+')) {
+      const existingBranches = pipelineEdges.filter(e => e.sourceNodeId === sourceId);
+      edgeLabel = `Branch ${existingBranches.length + 1}`;
+    }
+    setPipelineEdges(prev => [...prev, { id, sourceNodeId: sourceId, targetNodeId: targetId, label: edgeLabel }]);
   };
 
   const handleNodeDelete = (nodeId: string) => {
@@ -363,6 +533,51 @@ export function App() {
     setPipelineEdges(prev => prev.filter(e => e.sourceNodeId !== nodeId && e.targetNodeId !== nodeId));
     setSelectedNodeId(null);
   };
+
+  const handleEdgeDelete = (edgeId: string) => {
+    setPipelineEdges(prev => prev.filter(e => e.id !== edgeId));
+  };
+
+  const handleNodeConfigChange = (nodeId: string, config: Record<string, unknown>) => {
+    setPipelineNodes(prev => prev.map(n => n.id === nodeId ? { ...n, config } : n));
+  };
+
+  const handleNodeLabelChange = (nodeId: string, label: string) => {
+    setPipelineNodes(prev => prev.map(n => n.id === nodeId ? { ...n, label } : n));
+  };
+
+  const handleSavePipeline = (target: 'project' | 'global') => {
+    const selectedPipeline = availablePipelines.find(p => p.id === selectedPipelineId);
+    postMessage({
+      type: 'savePipeline',
+      pipeline: {
+        id: selectedPipelineId,
+        name: selectedPipeline?.name ?? 'Untitled',
+        description: selectedPipeline?.description,
+        entryNodeId: pipelineNodes[0]?.id ?? '',
+        nodes: pipelineNodes,
+        edges: pipelineEdges,
+      },
+      target,
+    });
+  };
+
+  const handleNewPipeline = () => {
+    postMessage({ type: 'promptNewPipeline' });
+  };
+
+  const handleClonePipeline = () => {
+    // Use postMessage to ask extension host for input (prompt() doesn't work in webviews)
+    postMessage({ type: 'promptClonePipeline', sourceId: selectedPipelineId });
+  };
+
+  const handleDeletePipeline = () => {
+    // Use postMessage to ask extension host for confirmation (confirm() doesn't work in webviews)
+    postMessage({ type: 'confirmDeletePipeline', pipelineId: selectedPipelineId });
+  };
+
+  // Is the currently selected pipeline a non-default pipeline? (for split view)
+  const showPipelineSplitView = isLoading && selectedPipelineId !== 'default';
 
   // Filter models for chat input based on pool
   const chatModels = modelPool.length > 0
@@ -434,6 +649,23 @@ export function App() {
             </div>
           </div>
 
+          {/* Pipeline progress bar when running a non-default pipeline */}
+          {showPipelineSplitView && pipelineNodes.length > 0 && (
+            <div className="pipeline-progress-bar">
+              {pipelineNodes.map(node => {
+                const statusClass = node.status === 'running' ? 'progress-running' :
+                  node.status === 'completed' ? 'progress-completed' :
+                  node.status === 'failed' ? 'progress-failed' :
+                  node.status === 'skipped' ? 'progress-skipped' : 'progress-idle';
+                return (
+                  <div key={node.id} className={`progress-node ${statusClass}`} title={`${node.label} (${node.status})`}>
+                    <span className="progress-node-label">{node.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="messages">
             {messages.length === 0 && !streamingContent && (
               <div className="welcome">
@@ -447,7 +679,20 @@ export function App() {
               </div>
             )}
 
-            {messages.map(msg => <MessageBubble key={msg.id} message={msg} />)}
+            {messages.map((msg) => {
+              // Parallel group marker — render the completed group inline
+              if (msg.toolName === '__parallel_group__') {
+                const groupId = msg.id.replace('parallel-marker-', '');
+                const group = completedParallelGroups.find(g => g.id === groupId);
+                return group ? <ParallelBranchGroup key={msg.id} group={group} /> : null;
+              }
+              return <MessageBubble key={msg.id} message={msg} />;
+            })}
+
+            {/* Render active parallel group (always at the bottom while running) */}
+            {parallelGroup && (
+              <ParallelBranchGroup group={parallelGroup} />
+            )}
 
             {streamingContent && (
               <MessageBubble message={{ id: 'streaming', role: 'assistant', content: streamingContent, isStreaming: true, timestamp: Date.now() }} />
@@ -477,22 +722,66 @@ export function App() {
             attachments={attachments}
             onAddAttachment={addAttachment}
             onRemoveAttachment={removeAttachment}
+            pipelines={availablePipelines}
+            selectedPipelineId={selectedPipelineId}
+            onPipelineChange={(pipelineId) => {
+              setSelectedPipelineId(pipelineId);
+              postMessage({ type: 'selectPipeline', pipelineId });
+            }}
           />
         </>
       )}
 
       {/* Pipeline Tab */}
       {activeTab === 'pipeline' && (
-        <PipelineEditor
-          nodes={pipelineNodes}
-          edges={pipelineEdges}
-          onNodeMove={handleNodeMove}
-          onNodeSelect={setSelectedNodeId}
-          onNodeAdd={handleNodeAdd}
-          onEdgeAdd={handleEdgeAdd}
-          onNodeDelete={handleNodeDelete}
-          selectedNodeId={selectedNodeId}
-        />
+        <div className="pipeline-tab">
+          <div className="pipeline-toolbar">
+            <label htmlFor="pipeline-select">Pipeline:</label>
+            <select
+              id="pipeline-select"
+              value={selectedPipelineId}
+              onChange={e => {
+                setSelectedPipelineId(e.target.value);
+                postMessage({ type: 'selectPipeline', pipelineId: e.target.value });
+              }}
+            >
+              {availablePipelines.map(p => (
+                <option key={p.id} value={p.id}>{p.name}{p.source !== 'builtin' ? ` (${p.source})` : ''}</option>
+              ))}
+              {availablePipelines.length === 0 && (
+                <option value="default">Default</option>
+              )}
+            </select>
+            <div className="pipeline-save-toolbar">
+              <button onClick={handleNewPipeline} title="Create new blank pipeline">New</button>
+              <button onClick={() => handleSavePipeline('project')} title="Save to project">Save</button>
+              <button onClick={handleClonePipeline} title="Clone pipeline">Clone</button>
+              {availablePipelines.find(p => p.id === selectedPipelineId)?.source !== 'builtin' && (
+                <button onClick={handleDeletePipeline} title="Delete pipeline">Delete</button>
+              )}
+            </div>
+          </div>
+          <PipelineEditor
+            nodes={pipelineNodes}
+            edges={pipelineEdges}
+            onNodeMove={handleNodeMove}
+            onNodeSelect={setSelectedNodeId}
+            onNodeAdd={handleNodeAdd}
+            onEdgeAdd={handleEdgeAdd}
+            onNodeDelete={handleNodeDelete}
+            onEdgeDelete={handleEdgeDelete}
+            onNodeConfigChange={handleNodeConfigChange}
+            onNodeLabelChange={handleNodeLabelChange}
+            onEnhancePrompt={(nodeId, prompt) => {
+              setEnhancingNodeId(nodeId);
+              postMessage({ type: 'enhancePrompt', nodeId, prompt });
+            }}
+            selectedNodeId={selectedNodeId}
+            availableModels={chatModels.map(m => ({ id: m.id, name: m.name }))}
+            availableTools={AVAILABLE_TOOLS}
+            enhancingNodeId={enhancingNodeId}
+          />
+        </div>
       )}
 
       {/* Network Tab */}

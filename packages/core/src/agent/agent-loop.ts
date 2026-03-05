@@ -12,6 +12,7 @@ import type {
   ToolDefinition,
   ToolContext,
   ToolResult,
+  SubAgentMessage,
 } from '../types';
 
 function generateId(): string {
@@ -24,10 +25,12 @@ export class AgentLoop {
   private messages: ChatMessage[] = [];
   private toolContext: ToolContext;
   private abortController: AbortController | null = null;
+  private pendingInjections: string[] = [];
   private onToken: (token: StreamToken) => void;
   private onToolCall: (tc: ToolCall) => void;
   private onToolResult: (result: ToolResult) => void;
   private onMessageComplete: (msg: ChatMessage) => void;
+  private parallelSpawn?: (tasks: Array<{ systemPrompt: string; task: string; model?: string }>) => Promise<Array<{ content: string; subMessages: SubAgentMessage[] }>>;
 
   constructor(
     client: OpenRouterClient,
@@ -38,6 +41,7 @@ export class AgentLoop {
       onToolCall: (tc: ToolCall) => void;
       onToolResult: (result: ToolResult) => void;
       onMessageComplete: (msg: ChatMessage) => void;
+      parallelSpawn?: (tasks: Array<{ systemPrompt: string; task: string; model?: string }>) => Promise<Array<{ content: string; subMessages: SubAgentMessage[] }>>;
     },
   ) {
     this.client = client;
@@ -47,6 +51,7 @@ export class AgentLoop {
     this.onToolCall = callbacks.onToolCall;
     this.onToolResult = callbacks.onToolResult;
     this.onMessageComplete = callbacks.onMessageComplete;
+    this.parallelSpawn = callbacks.parallelSpawn;
 
     // Initialize with system prompt
     this.messages.push({
@@ -71,7 +76,7 @@ export class AgentLoop {
       timestamp: Date.now(),
     });
 
-    const maxIterations = this.config.maxIterations ?? 25;
+    const maxIterations = this.config.maxIterations ?? Infinity;
 
     for (let i = 0; i < maxIterations; i++) {
       if (this.abortController.signal.aborted) break;
@@ -89,25 +94,65 @@ export class AgentLoop {
       this.messages.push(assistantMsg);
       this.onMessageComplete(assistantMsg);
 
-      // If no tool calls, we're done
-      if (toolCalls.length === 0) break;
-
-      // Execute tool calls and feed results back
-      for (const tc of toolCalls) {
-        if (this.abortController.signal.aborted) break;
-
-        this.onToolCall(tc);
-        const result = await this.executeTool(tc);
-        this.onToolResult(result);
-
-        this.messages.push({
-          id: generateId(),
-          role: 'tool',
-          content: result.content,
-          toolCallId: result.toolCallId,
-          timestamp: Date.now(),
-        });
+      // If no tool calls, check for injected user messages before stopping
+      if (toolCalls.length === 0) {
+        if (!this.drainInjections()) break;
+        // User message was injected — continue the loop
+        continue;
       }
+
+      // Execute tool calls — parallelise spawn_agent when the callback is available
+      const allSpawn = toolCalls.every(tc => tc.name === 'spawn_agent');
+
+      if (allSpawn && toolCalls.length >= 1 && this.parallelSpawn) {
+        // Delegate parallel spawn to the executor for branch-isolated streaming
+        for (const tc of toolCalls) this.onToolCall(tc);
+
+        const tasks = toolCalls.map(tc => ({
+          systemPrompt: tc.arguments.system_prompt as string,
+          task: tc.arguments.task as string,
+          model: tc.arguments.model as string | undefined,
+        }));
+
+        const spawnResults = await this.parallelSpawn(tasks);
+
+        for (let i = 0; i < toolCalls.length; i++) {
+          const sr = spawnResults[i];
+          const result: ToolResult = {
+            toolCallId: toolCalls[i].id,
+            content: sr?.content ?? 'No result',
+            subMessages: sr?.subMessages,
+          };
+          this.onToolResult(result);
+          this.messages.push({
+            id: generateId(),
+            role: 'tool',
+            content: result.content,
+            toolCallId: result.toolCallId,
+            timestamp: Date.now(),
+          });
+        }
+      } else {
+        // Sequential execution for tools that may have ordering dependencies
+        for (const tc of toolCalls) {
+          if (this.abortController.signal.aborted) break;
+
+          this.onToolCall(tc);
+          const result = await this.executeTool(tc);
+          this.onToolResult(result);
+
+          this.messages.push({
+            id: generateId(),
+            role: 'tool',
+            content: result.content,
+            toolCallId: result.toolCallId,
+            timestamp: Date.now(),
+          });
+        }
+      }
+
+      // Drain any user messages that arrived during tool execution
+      this.drainInjections();
     }
 
     this.abortController = null;
@@ -115,6 +160,33 @@ export class AgentLoop {
 
   cancel(): void {
     this.abortController?.abort();
+  }
+
+  /**
+   * Inject a user message into the running agent loop.
+   * The message will be picked up after the current LLM response or tool
+   * execution completes, keeping the agent in its existing conversation context.
+   */
+  injectMessage(message: string): void {
+    this.pendingInjections.push(message);
+  }
+
+  /**
+   * Drain all pending injections into the message history as user messages.
+   * Returns true if any messages were drained.
+   */
+  private drainInjections(): boolean {
+    if (this.pendingInjections.length === 0) return false;
+    while (this.pendingInjections.length > 0) {
+      const text = this.pendingInjections.shift()!;
+      this.messages.push({
+        id: generateId(),
+        role: 'user',
+        content: text,
+        timestamp: Date.now(),
+      });
+    }
+    return true;
   }
 
   getMessages(): ChatMessage[] {

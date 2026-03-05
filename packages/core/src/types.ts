@@ -25,6 +25,18 @@ export interface ToolResult {
   toolCallId: string;
   content: string;
   isError?: boolean;
+  /** Collected sub-agent activity (for spawn_agent tool calls). */
+  subMessages?: SubAgentMessage[];
+}
+
+/** A single activity record from a spawned sub-agent. */
+export interface SubAgentMessage {
+  role: 'assistant' | 'tool';
+  content: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolResult?: string;
+  isError?: boolean;
 }
 
 // ── Models ──
@@ -68,12 +80,18 @@ export interface ToolParameterProperty {
 export interface ToolContext {
   workspaceRoot: string;
   sendMessage: (msg: string) => void;
-  askUser: (prompt: string, options?: string[]) => Promise<string>;
+  askUser: (prompt: string, options?: string[], multiSelect?: boolean) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, content: string) => Promise<void>;
   executeCommand: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   getDiagnostics: (uri: string) => Promise<DiagnosticInfo[]>;
   applyEdit: (uri: string, edits: TextEditInfo[]) => Promise<boolean>;
+
+  // Pipeline management (optional — available when running inside the extension)
+  savePipeline?: (pipeline: import('./pipeline/types').Pipeline, target: 'project' | 'global') => Promise<void>;
+  getPipeline?: (id: string) => Promise<import('./pipeline/types').Pipeline | undefined>;
+  getAvailablePipelines?: () => Promise<PipelineInfo[]>;
+  deletePipeline?: (id: string) => Promise<boolean>;
 }
 
 export interface DiagnosticInfo {
@@ -169,17 +187,29 @@ export interface BenchmarkModelEntry {
   date?: string;
 }
 
+// ── Pipeline Info (for webview pipeline selector) ──
+
+export interface PipelineInfo {
+  id: string;
+  name: string;
+  description?: string;
+  source: 'builtin' | 'global' | 'project';
+}
+
 // ── Events (extension ↔ webview) ──
 
 export type ExtensionMessage =
-  | { type: 'streamToken'; token: StreamToken }
-  | { type: 'messageComplete'; message: ChatMessage }
-  | { type: 'toolCallStart'; toolCall: ToolCall }
-  | { type: 'toolCallResult'; result: ToolResult }
+  | { type: 'streamToken'; token: StreamToken; branchId?: string }
+  | { type: 'messageComplete'; message: ChatMessage; branchId?: string }
+  | { type: 'toolCallStart'; toolCall: ToolCall; branchId?: string }
+  | { type: 'toolCallResult'; result: ToolResult; branchId?: string }
+  | { type: 'parallelStart'; branches: ParallelBranchInfo[] }
+  | { type: 'parallelBranchComplete'; branchId: string; label: string }
+  | { type: 'parallelComplete' }
   | { type: 'modelsLoaded'; models: ModelInfo[] }
   | { type: 'modelChanged'; modelId: string }
   | { type: 'error'; error: string }
-  | { type: 'askUser'; id: string; prompt: string; options?: string[] }
+  | { type: 'askUser'; id: string; prompt: string; options?: string[]; multiSelect?: boolean }
   | { type: 'filePicked'; path: string; content: string }
   | { type: 'workspaceFilesResult'; files: string[] }
   | { type: 'settingsLoaded'; securityLevel: string; archiveEnabled: boolean; modelPool: string[]; hasBraveApiKey: boolean; webSearchEnabled: boolean }
@@ -189,7 +219,37 @@ export type ExtensionMessage =
   | { type: 'benchmarkError'; error: string }
   | { type: 'modelPoolUpdated'; modelPool: string[] }
   | { type: 'indexingStatus'; state: 'idle' | 'indexing' | 'ready' | 'error'; filesIndexed?: number; totalFiles?: number; chunkCount?: number; error?: string }
-  | { type: 'agentLoopDone' };
+  | { type: 'agentLoopDone' }
+  | { type: 'pipelinesLoaded'; pipelines: PipelineInfo[] }
+  | { type: 'pipelineChanged'; pipelineId: string }
+  | { type: 'pipelineNodeStatus'; nodeId: string; status: string; result?: string; error?: string }
+  | { type: 'pipelineGraphLoaded'; nodes: PipelineGraphNode[]; edges: PipelineGraphEdge[] }
+  | { type: 'pipelineSaved'; pipelineId: string }
+  | { type: 'pipelineDeleted'; pipelineId: string }
+  | { type: 'promptEnhanced'; nodeId: string; enhanced: string }
+  | { type: 'promptEnhanceError'; nodeId: string; error: string };
+
+export interface ParallelBranchInfo {
+  branchId: string;
+  label: string;
+  nodeId: string;
+}
+
+export interface PipelineGraphNode {
+  id: string;
+  type: string;
+  label: string;
+  position: { x: number; y: number };
+  status: string;
+  config: Record<string, unknown>;
+}
+
+export interface PipelineGraphEdge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  label?: string;
+}
 
 export type WebviewMessage =
   | { type: 'sendMessage'; content: string; attachments?: Attachment[] }
@@ -212,4 +272,23 @@ export type WebviewMessage =
   | { type: 'addToModelPool'; modelId: string }
   | { type: 'setBraveApiKey'; key: string }
   | { type: 'setWebSearchEnabled'; enabled: boolean }
-  | { type: 'reindexCodebase' };
+  | { type: 'reindexCodebase' }
+  | { type: 'selectPipeline'; pipelineId: string }
+  | { type: 'loadPipelines' }
+  | { type: 'savePipeline'; pipeline: PipelineGraphData; target: 'project' | 'global' }
+  | { type: 'deletePipeline'; pipelineId: string }
+  | { type: 'confirmDeletePipeline'; pipelineId: string }
+  | { type: 'clonePipeline'; sourceId: string; newName: string; target: 'project' | 'global' }
+  | { type: 'promptClonePipeline'; sourceId: string }
+  | { type: 'promptNewPipeline' }
+  | { type: 'updateNodeConfig'; nodeId: string; config: Record<string, unknown> }
+  | { type: 'enhancePrompt'; nodeId: string; prompt: string };
+
+export interface PipelineGraphData {
+  id: string;
+  name: string;
+  description?: string;
+  entryNodeId: string;
+  nodes: PipelineGraphNode[];
+  edges: PipelineGraphEdge[];
+}

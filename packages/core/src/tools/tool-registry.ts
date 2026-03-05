@@ -3,8 +3,14 @@
  */
 
 import type { ToolDefinition, ToolContext } from '../types';
+import type { Pipeline, PipelineNode, PipelineEdge, NodeType } from '../pipeline/types';
 import * as path from 'path';
 import * as fs from 'fs';
+
+const VALID_NODE_TYPES: NodeType[] = [
+  'agent', 'tool', 'decision_gate', 'user_checkpoint',
+  'loop', 'parallel', 'verification', 'plugin',
+];
 
 export function createCoreTools(): ToolDefinition[] {
   return [
@@ -17,6 +23,10 @@ export function createCoreTools(): ToolDefinition[] {
     runTerminalTool,
     askUserTool,
     attemptCompletionTool,
+    createPipelineTool,
+    editPipelineTool,
+    listPipelinesTool,
+    deletePipelineTool,
   ];
 }
 
@@ -403,21 +413,29 @@ const runTerminalTool: ToolDefinition = {
 
 const askUserTool: ToolDefinition = {
   name: 'ask_user',
-  description: 'Ask the user a question and wait for their response. Use this when you need clarification or user input.',
+  description: 'Ask the user a question and wait for their response. The question supports full markdown formatting (bold, code blocks, blockquotes, lists, etc.). Provide clickable options when possible — the user can always type a custom response instead. Use multiSelect when the user should be able to pick more than one option.',
   parameters: {
     type: 'object',
     properties: {
-      question: { type: 'string', description: 'The question to ask the user' },
+      question: { type: 'string', description: 'The question to ask the user. Supports markdown formatting.' },
       options: {
         type: 'array',
-        description: 'Optional list of predefined answer options',
+        description: 'Predefined answer options. In single-select mode (default), shown as clickable buttons — clicking one sends it immediately. In multi-select mode, shown as checkboxes — the user checks one or more and clicks Submit. The user can always type a custom response instead.',
         items: { type: 'string' },
+      },
+      multiSelect: {
+        type: 'boolean',
+        description: 'If true, options are shown as checkboxes and the user can select multiple. The response will be a comma-separated list of selected options. Defaults to false (single-select buttons).',
       },
     },
     required: ['question'],
   },
   execute: async (args, ctx) => {
-    const response = await ctx.askUser(args.question as string, args.options as string[] | undefined);
+    const response = await ctx.askUser(
+      args.question as string,
+      args.options as string[] | undefined,
+      args.multiSelect as boolean | undefined,
+    );
     return `User responded: ${response}`;
   },
 };
@@ -440,6 +458,274 @@ const attemptCompletionTool: ToolDefinition = {
     return `Task completed: ${args.result}`;
   },
 };
+
+// ── create_pipeline ──
+
+const createPipelineTool: ToolDefinition = {
+  name: 'create_pipeline',
+  description: `Create a new workflow pipeline with nodes and edges. Pipelines are directed graphs that orchestrate multi-step agent workflows.
+
+Available node types and their config:
+- agent: { type: "agent", model?: string, systemPrompt?: string, tools?: string[], maxIterations?: number, temperature?: number, inheritContext?: boolean }
+- tool: { type: "tool", toolName: string, parameters: object, timeout?: number }
+- decision_gate: { type: "decision_gate", condition: string, mode: "deterministic"|"ai_evaluated", trueEdge: string, falseEdge: string }
+- user_checkpoint: { type: "user_checkpoint", prompt: string, timeout?: number }
+- loop: { type: "loop", maxIterations: number, exitCondition?: string, subGraphNodeIds: string[] }
+- parallel: { type: "parallel", branches: [{ label: string, nodeIds: string[] }], mergeStrategy: "wait_all"|"first_completed" }
+- verification: { type: "verification", verificationType: "lsp_diagnostics"|"test_runner"|"syntax_check"|"custom", command?: string, passEdge: string, failEdge: string }
+- plugin: { type: "plugin", pluginId: string, pluginConfig: object }
+
+Edges connect nodes: { sourceNodeId: string, targetNodeId: string, label?: string, condition?: string }
+For decision_gate and verification nodes, edge IDs must match the trueEdge/falseEdge or passEdge/failEdge config values.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Display name for the pipeline' },
+      description: { type: 'string', description: 'What this pipeline does' },
+      nodes: {
+        type: 'array',
+        description: 'Array of pipeline nodes. Each node needs: id (string), type (NodeType), label (string), config (NodeConfig object with type field matching node type)',
+        items: { type: 'object' },
+      },
+      edges: {
+        type: 'array',
+        description: 'Array of edges connecting nodes. Each edge needs: sourceNodeId, targetNodeId, and optionally label and condition',
+        items: { type: 'object' },
+      },
+      entryNodeId: { type: 'string', description: 'ID of the first node to execute' },
+      target: { type: 'string', description: 'Where to save: "project" (default) or "global"', enum: ['project', 'global'] },
+    },
+    required: ['name', 'description', 'nodes', 'edges', 'entryNodeId'],
+  },
+  execute: async (args, ctx) => {
+    if (!ctx.savePipeline) {
+      return 'Error: Pipeline management is not available in this context.';
+    }
+
+    const name = args.name as string;
+    const nodes = args.nodes as Array<Record<string, unknown>>;
+    const edges = args.edges as Array<Record<string, unknown>>;
+    const entryNodeId = args.entryNodeId as string;
+    const target = (args.target as 'project' | 'global') ?? 'project';
+
+    // Validate
+    const validation = validatePipelineStructure(nodes, edges, entryNodeId);
+    if (validation) return `Error: ${validation}`;
+
+    const id = slugify(name) + '-' + Date.now().toString(36);
+
+    const pipeline: Pipeline = {
+      id,
+      name,
+      description: args.description as string,
+      entryNodeId,
+      nodes: nodes.map(n => ({
+        id: n.id as string,
+        type: n.type as NodeType,
+        label: n.label as string,
+        config: n.config as PipelineNode['config'],
+        position: (n.position as { x: number; y: number }) ?? { x: 0, y: 0 },
+        status: 'idle' as const,
+      })),
+      edges: edges.map((e, i) => ({
+        id: (e.id as string) ?? `edge-${i}`,
+        sourceNodeId: e.sourceNodeId as string,
+        targetNodeId: e.targetNodeId as string,
+        label: e.label as string | undefined,
+        condition: e.condition as string | undefined,
+      })),
+      metadata: {
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    };
+
+    await ctx.savePipeline(pipeline, target);
+    return `Pipeline created successfully!\n  Name: ${name}\n  ID: ${id}\n  Nodes: ${nodes.length}\n  Edges: ${edges.length}\n  Saved to: ${target}`;
+  },
+};
+
+// ── edit_pipeline ──
+
+const editPipelineTool: ToolDefinition = {
+  name: 'edit_pipeline',
+  description: 'Edit an existing pipeline. You can update its name, description, nodes, edges, and/or entryNodeId. Only provide the fields you want to change — unspecified fields keep their current values. Use list_pipelines first to find the pipeline ID.',
+  parameters: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'ID of the pipeline to edit' },
+      name: { type: 'string', description: 'New display name (optional)' },
+      description: { type: 'string', description: 'New description (optional)' },
+      nodes: {
+        type: 'array',
+        description: 'Replace all nodes (optional). Same format as create_pipeline.',
+        items: { type: 'object' },
+      },
+      edges: {
+        type: 'array',
+        description: 'Replace all edges (optional). Same format as create_pipeline.',
+        items: { type: 'object' },
+      },
+      entryNodeId: { type: 'string', description: 'New entry node ID (optional)' },
+    },
+    required: ['id'],
+  },
+  execute: async (args, ctx) => {
+    if (!ctx.getPipeline || !ctx.savePipeline) {
+      return 'Error: Pipeline management is not available in this context.';
+    }
+
+    const id = args.id as string;
+    const existing = await ctx.getPipeline(id);
+    if (!existing) {
+      return `Error: Pipeline not found: "${id}". Use list_pipelines to see available pipelines.`;
+    }
+
+    const changes: string[] = [];
+
+    if (args.name !== undefined) {
+      existing.name = args.name as string;
+      changes.push('name');
+    }
+    if (args.description !== undefined) {
+      existing.description = args.description as string;
+      changes.push('description');
+    }
+    if (args.nodes !== undefined) {
+      const nodes = args.nodes as Array<Record<string, unknown>>;
+      existing.nodes = nodes.map(n => ({
+        id: n.id as string,
+        type: n.type as NodeType,
+        label: n.label as string,
+        config: n.config as PipelineNode['config'],
+        position: (n.position as { x: number; y: number }) ?? { x: 0, y: 0 },
+        status: 'idle' as const,
+      }));
+      changes.push('nodes');
+    }
+    if (args.edges !== undefined) {
+      const edges = args.edges as Array<Record<string, unknown>>;
+      existing.edges = edges.map((e, i) => ({
+        id: (e.id as string) ?? `edge-${i}`,
+        sourceNodeId: e.sourceNodeId as string,
+        targetNodeId: e.targetNodeId as string,
+        label: e.label as string | undefined,
+        condition: e.condition as string | undefined,
+      }));
+      changes.push('edges');
+    }
+    if (args.entryNodeId !== undefined) {
+      existing.entryNodeId = args.entryNodeId as string;
+      changes.push('entryNodeId');
+    }
+
+    // Validate the merged result
+    const validation = validatePipelineStructure(
+      existing.nodes.map(n => ({ id: n.id, type: n.type, label: n.label, config: n.config })),
+      existing.edges.map(e => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
+      existing.entryNodeId,
+    );
+    if (validation) return `Error: ${validation}`;
+
+    if (existing.metadata) {
+      existing.metadata.updatedAt = Date.now();
+    }
+
+    await ctx.savePipeline(existing, 'project');
+    return `Pipeline "${existing.name}" updated.\n  Changed: ${changes.join(', ')}\n  Nodes: ${existing.nodes.length}\n  Edges: ${existing.edges.length}`;
+  },
+};
+
+// ── list_pipelines ──
+
+const listPipelinesTool: ToolDefinition = {
+  name: 'list_pipelines',
+  description: 'List all available pipelines with their IDs, names, descriptions, and sources.',
+  parameters: {
+    type: 'object',
+    properties: {},
+  },
+  execute: async (_args, ctx) => {
+    if (!ctx.getAvailablePipelines) {
+      return 'Error: Pipeline management is not available in this context.';
+    }
+
+    const pipelines = await ctx.getAvailablePipelines();
+    if (pipelines.length === 0) {
+      return 'No pipelines available.';
+    }
+
+    const lines = pipelines.map(p =>
+      `- ${p.name} (id: ${p.id}, source: ${p.source})${p.description ? `\n  ${p.description}` : ''}`,
+    );
+    return `Available pipelines:\n${lines.join('\n')}`;
+  },
+};
+
+// ── delete_pipeline ──
+
+const deletePipelineTool: ToolDefinition = {
+  name: 'delete_pipeline',
+  description: 'Delete a pipeline by ID. Cannot delete built-in or default pipelines.',
+  parameters: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'ID of the pipeline to delete' },
+    },
+    required: ['id'],
+  },
+  execute: async (args, ctx) => {
+    if (!ctx.deletePipeline) {
+      return 'Error: Pipeline management is not available in this context.';
+    }
+
+    const id = args.id as string;
+    const deleted = await ctx.deletePipeline(id);
+    return deleted
+      ? `Pipeline "${id}" deleted successfully.`
+      : `Could not delete pipeline "${id}". It may be a built-in pipeline or does not exist.`;
+  },
+};
+
+// ── Pipeline helpers ──
+
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function validatePipelineStructure(
+  nodes: Array<Record<string, unknown>>,
+  edges: Array<Record<string, unknown>>,
+  entryNodeId: string,
+): string | null {
+  if (!nodes.length) return 'Pipeline must have at least one node.';
+
+  const nodeIds = new Set(nodes.map(n => n.id as string));
+
+  if (!nodeIds.has(entryNodeId)) {
+    return `entryNodeId "${entryNodeId}" does not match any node ID.`;
+  }
+
+  for (const node of nodes) {
+    if (!node.id || !node.type || !node.label) {
+      return `Each node must have id, type, and label. Got: ${JSON.stringify(node)}`;
+    }
+    if (!VALID_NODE_TYPES.includes(node.type as NodeType)) {
+      return `Invalid node type "${node.type}". Valid types: ${VALID_NODE_TYPES.join(', ')}`;
+    }
+  }
+
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.sourceNodeId as string)) {
+      return `Edge references unknown source node "${edge.sourceNodeId}".`;
+    }
+    if (!nodeIds.has(edge.targetNodeId as string)) {
+      return `Edge references unknown target node "${edge.targetNodeId}".`;
+    }
+  }
+
+  return null;
+}
 
 // ── Helpers ──
 

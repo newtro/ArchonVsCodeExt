@@ -9,6 +9,7 @@ export type NodeType =
   | 'user_checkpoint'
   | 'loop'
   | 'parallel'
+  | 'join'
   | 'verification'
   | 'plugin';
 
@@ -23,6 +24,9 @@ export interface PipelineNode {
   status: NodeStatus;
   result?: string;
   error?: string;
+  retryCount?: number;  // Number of retry attempts on failure (default: 0)
+  /** Set at runtime when this node runs inside a parallel branch */
+  branchId?: string;
 }
 
 export type NodeConfig =
@@ -32,16 +36,18 @@ export type NodeConfig =
   | UserCheckpointConfig
   | LoopConfig
   | ParallelConfig
+  | JoinConfig
   | VerificationConfig
   | PluginConfig;
 
 export interface AgentNodeConfig {
   type: 'agent';
-  model?: string;          // If empty, use orchestrator-assigned model
+  model?: string;          // If empty or 'default', use the chat-selected model
   systemPrompt?: string;
   temperature?: number;
-  tools?: string[];        // Tool names available to this agent
+  tools?: string[];        // Tool names available to this agent; undefined = all
   maxIterations?: number;
+  inheritContext?: boolean; // Whether to inherit conversation history from prior nodes
 }
 
 export interface ToolNodeConfig {
@@ -75,11 +81,15 @@ export interface LoopConfig {
 
 export interface ParallelConfig {
   type: 'parallel';
-  branches: Array<{
-    label: string;
-    nodeIds: string[];
-  }>;
+  // Branches are edge-driven — each outgoing edge is a branch.
+  // No internal branch config needed.
+}
+
+export interface JoinConfig {
+  type: 'join';
   mergeStrategy: 'wait_all' | 'first_completed' | 'custom';
+  failurePolicy: 'fail_fast' | 'collect_partial' | 'ignore_failures';
+  branchTimeout?: number;  // ms — per-branch timeout; proceed without slow branches
 }
 
 export interface VerificationConfig {

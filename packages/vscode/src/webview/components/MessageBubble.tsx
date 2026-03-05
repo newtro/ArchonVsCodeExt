@@ -79,10 +79,16 @@ function toolSummary(name: string, args?: Record<string, unknown>): string {
       return `Fetch ${truncate(String(args.url ?? ''), 60)}`;
     case 'lookup_docs':
       return `Docs: ${args.query ?? ''}`;
-    case 'ask_user':
-      return `Ask user`;
+    case 'ask_user': {
+      const question = args.question as string ?? args.prompt as string ?? '';
+      return question ? `Ask user: "${truncate(question, 80)}"` : 'Ask user';
+    }
     case 'attempt_completion':
       return `Complete`;
+    case 'spawn_agent': {
+      const task = args.task as string ?? '';
+      return `Spawn agent: "${truncate(task, 80)}"`;
+    }
     case 'diff_view':
       return `Diff ${args.path ?? ''}`;
     default:
@@ -100,14 +106,16 @@ function truncate(s: string, max: number): string {
  */
 function ToolCallMessage({ message }: { message: UIMessage }) {
   const [expanded, setExpanded] = useState(false);
-  const { toolName, toolArgs, toolResult, toolStatus, isError } = message;
+  const { toolName, toolArgs, toolResult, toolStatus, isError, subMessages } = message;
 
   const summary = useMemo(
     () => toolSummary(toolName ?? 'tool', toolArgs),
     [toolName, toolArgs],
   );
 
-  const hasDetails = !!(toolArgs && Object.keys(toolArgs).length > 0) || !!toolResult;
+  const isSpawnAgent = toolName === 'spawn_agent';
+  const hasSubMessages = !!(subMessages && subMessages.length > 0);
+  const hasDetails = !!(toolArgs && Object.keys(toolArgs).length > 0) || !!toolResult || hasSubMessages;
 
   const statusClass = toolStatus === 'running' ? 'tc-running'
     : isError ? 'tc-error'
@@ -132,19 +140,77 @@ function ToolCallMessage({ message }: { message: UIMessage }) {
 
       {expanded && (
         <div className="tc-details">
-          {toolArgs && Object.keys(toolArgs).length > 0 && (
-            <div className="tc-section">
-              <div className="tc-section-label">Arguments</div>
-              <pre className="tc-pre">{JSON.stringify(toolArgs, null, 2)}</pre>
+          {/* For spawn_agent, show sub-agent activity instead of raw args/result */}
+          {isSpawnAgent && hasSubMessages ? (
+            <div className="tc-sub-messages">
+              {subMessages!.map((sub, i) => {
+                if (sub.role === 'tool' && sub.toolName) {
+                  const subSummary = toolSummary(sub.toolName, sub.toolArgs);
+                  return (
+                    <SubToolCall
+                      key={i}
+                      summary={subSummary}
+                      result={sub.toolResult}
+                      isError={sub.isError}
+                    />
+                  );
+                }
+                if (sub.role === 'assistant' && sub.content) {
+                  return (
+                    <div key={i} className="tc-sub-assistant">
+                      {sub.content.length > 500 ? sub.content.slice(0, 500) + '\n…' : sub.content}
+                    </div>
+                  );
+                }
+                return null;
+              })}
             </div>
-          )}
-          {toolResult && (
-            <div className="tc-section">
-              <div className="tc-section-label">Result</div>
-              <pre className="tc-pre">{toolResult.length > 2000 ? toolResult.slice(0, 2000) + '\n... (truncated)' : toolResult}</pre>
-            </div>
+          ) : (
+            <>
+              {toolArgs && Object.keys(toolArgs).length > 0 && (
+                <div className="tc-section">
+                  <div className="tc-section-label">Arguments</div>
+                  <pre className="tc-pre">{JSON.stringify(toolArgs, null, 2)}</pre>
+                </div>
+              )}
+              {toolResult && (
+                <div className="tc-section">
+                  <div className="tc-section-label">Result</div>
+                  <pre className="tc-pre">{toolResult.length > 2000 ? toolResult.slice(0, 2000) + '\n... (truncated)' : toolResult}</pre>
+                </div>
+              )}
+            </>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Nested tool call inside a spawn_agent expansion — compact, one-liner + optional result. */
+function SubToolCall({ summary, result, isError }: { summary: string; result?: string; isError?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const hasResult = !!result;
+  const dotClass = isError ? 'tc-sub-dot-error' : 'tc-sub-dot-done';
+
+  return (
+    <div className="tc-sub-tool">
+      <div
+        className="tc-sub-tool-header"
+        onClick={() => hasResult && setOpen(!open)}
+        role={hasResult ? 'button' : undefined}
+        tabIndex={hasResult ? 0 : undefined}
+      >
+        <span className={`tc-sub-dot ${dotClass}`} />
+        <span className="tc-sub-tool-summary">{summary}</span>
+        {hasResult && (
+          <span className={`tc-chevron-sm ${open ? 'tc-chevron-open' : ''}`}>
+            <ChevronDownIcon />
+          </span>
+        )}
+      </div>
+      {open && result && (
+        <pre className="tc-sub-result">{result.length > 1000 ? result.slice(0, 1000) + '\n… (truncated)' : result}</pre>
       )}
     </div>
   );

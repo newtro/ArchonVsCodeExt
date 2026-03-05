@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useCallback } from 'react';
-import type { ModelInfo, Attachment } from '@archon/core';
+import type { ModelInfo, Attachment, PipelineInfo } from '@archon/core';
 import { SendIcon, StopIcon, PaperclipIcon } from './Icons';
 import { AttachmentChip } from './AttachmentChip';
 import { FilePickerPopup } from './FilePickerPopup';
@@ -22,6 +22,9 @@ interface Props {
   attachments: Attachment[];
   onAddAttachment: (attachment: Attachment) => void;
   onRemoveAttachment: (id: string) => void;
+  pipelines: PipelineInfo[];
+  selectedPipelineId: string;
+  onPipelineChange: (pipelineId: string) => void;
 }
 
 export function ChatInput({
@@ -29,6 +32,7 @@ export function ChatInput({
   models, selectedModelId, onModelChange,
   onPickFile, workspaceFiles,
   attachments, onAddAttachment, onRemoveAttachment,
+  pipelines, selectedPipelineId, onPipelineChange,
 }: Props) {
   const [input, setInput] = useState('');
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -170,6 +174,19 @@ export function ChatInput({
           {models.map((m) => (
             <option key={m.id} value={m.id}>{m.name}</option>
           ))}
+        </select>
+
+        <select
+          className="input-pipeline-selector"
+          value={selectedPipelineId}
+          onChange={(e) => onPipelineChange(e.target.value)}
+          title="Select pipeline"
+          disabled={isLoading}
+        >
+          {pipelines.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+          {pipelines.length === 0 && <option value="default">Default</option>}
         </select>
 
         <div className="input-actions">
