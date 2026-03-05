@@ -125,6 +125,14 @@ export class AgentLoop {
     this.messages = [this.messages[0]]; // Keep system prompt
   }
 
+  /**
+   * Load prior conversation history (e.g. from a saved session).
+   * Replaces all messages after the system prompt.
+   */
+  loadHistory(history: ChatMessage[]): void {
+    this.messages = [this.messages[0], ...history];
+  }
+
   private async streamResponse(): Promise<{ textContent: string; toolCalls: ToolCall[] }> {
     let textContent = '';
     const toolCalls: ToolCall[] = [];

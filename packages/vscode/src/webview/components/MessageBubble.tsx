@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { marked } from 'marked';
 import type { UIMessage } from '../store';
+import { ChevronDownIcon } from './Icons';
 
 interface Props {
   message: UIMessage;
@@ -13,17 +14,17 @@ marked.setOptions({
 });
 
 export function MessageBubble({ message }: Props) {
-  const { role, content, toolName, isStreaming, isError } = message;
+  const { role, content, isStreaming } = message;
 
   if (role === 'tool') {
-    return <ToolOutput content={content} toolName={toolName} isError={isError} />;
+    return <ToolCallMessage message={message} />;
   }
 
   const renderedHtml = useMemo(() => renderMarkdown(content), [content]);
 
   return (
     <div className={`message ${role}`}>
-      <div className="message-role">{role === 'user' ? 'You' : 'Archon'}</div>
+      {role === 'user' && <div className="message-role">You</div>}
       <div className="message-content">
         <div
           className="markdown-body"
@@ -35,42 +36,116 @@ export function MessageBubble({ message }: Props) {
   );
 }
 
-const PREVIEW_LINES = 4;
-const PREVIEW_CHARS = 300;
+/**
+ * Generate a succinct one-liner summary for a tool call, similar to
+ * how Claude Code shows "Read src/file.ts (lines 1-50)".
+ */
+function toolSummary(name: string, args?: Record<string, unknown>): string {
+  if (!args) return name;
 
-function ToolOutput({ content, toolName, isError }: { content: string; toolName?: string; isError?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const isLong = content.split('\n').length > PREVIEW_LINES || content.length > PREVIEW_CHARS;
-
-  const displayContent = useMemo(() => {
-    if (expanded || !isLong) return content;
-    const lines = content.split('\n').slice(0, PREVIEW_LINES);
-    let preview = lines.join('\n');
-    if (preview.length > PREVIEW_CHARS) {
-      preview = preview.slice(0, PREVIEW_CHARS);
+  switch (name) {
+    case 'read_file': {
+      const p = args.path as string ?? '';
+      const sl = args.start_line as number | undefined;
+      const el = args.end_line as number | undefined;
+      const range = sl && el ? ` (lines ${sl}-${el})` : sl ? ` (from line ${sl})` : '';
+      return `Read ${p}${range}`;
     }
-    return preview + '\n...';
-  }, [content, expanded, isLong]);
+    case 'write_file':
+      return `Write ${args.path ?? ''}`;
+    case 'edit_file':
+      return `Edit ${args.path ?? ''}`;
+    case 'search_files':
+      return `Search "${args.pattern ?? ''}"${args.include ? ` in ${args.include}` : ''}`;
+    case 'find_files':
+      return `Find ${args.pattern ?? ''}`;
+    case 'list_directory':
+      return `List ${args.path ?? '.'}`;
+    case 'run_terminal':
+      return `Run \`${truncate(String(args.command ?? ''), 60)}\``;
+    case 'search_codebase':
+      return `Search codebase "${truncate(String(args.query ?? ''), 50)}"`;
+    case 'go_to_definition':
+      return `Go to definition: ${args.symbol ?? ''}`;
+    case 'find_references':
+      return `Find references: ${args.symbol ?? ''}`;
+    case 'get_hover_info':
+      return `Hover: ${args.file ?? ''}:${args.line ?? ''}`;
+    case 'get_diagnostics':
+      return `Diagnostics: ${args.file ?? ''}`;
+    case 'web_search':
+      return `Web search "${truncate(String(args.query ?? ''), 50)}"`;
+    case 'web_fetch':
+      return `Fetch ${truncate(String(args.url ?? ''), 60)}`;
+    case 'lookup_docs':
+      return `Docs: ${args.query ?? ''}`;
+    case 'ask_user':
+      return `Ask user`;
+    case 'attempt_completion':
+      return `Complete`;
+    case 'diff_view':
+      return `Diff ${args.path ?? ''}`;
+    default:
+      return name;
+  }
+}
 
-  const renderedHtml = useMemo(() => renderMarkdown(displayContent), [displayContent]);
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + '…' : s;
+}
+
+/**
+ * Combined tool call display: one-liner summary with colored status dot,
+ * expandable to show args + result.
+ */
+function ToolCallMessage({ message }: { message: UIMessage }) {
+  const [expanded, setExpanded] = useState(false);
+  const { toolName, toolArgs, toolResult, toolStatus, isError } = message;
+
+  const summary = useMemo(
+    () => toolSummary(toolName ?? 'tool', toolArgs),
+    [toolName, toolArgs],
+  );
+
+  const hasDetails = !!(toolArgs && Object.keys(toolArgs).length > 0) || !!toolResult;
+
+  const statusClass = toolStatus === 'running' ? 'tc-running'
+    : isError ? 'tc-error'
+    : 'tc-done';
 
   return (
-    <div className={`message tool ${isError ? 'tool-error' : ''}`}>
-      {(toolName || isLong) && (
-        <div className="tool-header" onClick={() => isLong && setExpanded(!expanded)}>
-          {toolName && <span className="tool-name">{toolName}</span>}
-          {isLong && (
-            <button className="tool-expand-btn" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
-              {expanded ? 'Collapse' : 'Expand'}
-            </button>
+    <div className={`tc ${statusClass}`}>
+      <div
+        className="tc-header"
+        onClick={() => hasDetails && setExpanded(!expanded)}
+        role={hasDetails ? 'button' : undefined}
+        tabIndex={hasDetails ? 0 : undefined}
+      >
+        <span className="tc-dot" />
+        <span className="tc-summary">{summary}</span>
+        {hasDetails && (
+          <span className={`tc-chevron ${expanded ? 'tc-chevron-open' : ''}`}>
+            <ChevronDownIcon />
+          </span>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="tc-details">
+          {toolArgs && Object.keys(toolArgs).length > 0 && (
+            <div className="tc-section">
+              <div className="tc-section-label">Arguments</div>
+              <pre className="tc-pre">{JSON.stringify(toolArgs, null, 2)}</pre>
+            </div>
+          )}
+          {toolResult && (
+            <div className="tc-section">
+              <div className="tc-section-label">Result</div>
+              <pre className="tc-pre">{toolResult.length > 2000 ? toolResult.slice(0, 2000) + '\n... (truncated)' : toolResult}</pre>
+            </div>
           )}
         </div>
       )}
-      <div
-        className="tool-output markdown-body"
-        dangerouslySetInnerHTML={{ __html: renderedHtml }}
-      />
     </div>
   );
 }

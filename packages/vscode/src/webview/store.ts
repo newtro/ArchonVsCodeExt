@@ -11,6 +11,9 @@ export interface UIMessage {
   content: string;
   toolName?: string;
   toolCallId?: string;
+  toolArgs?: Record<string, unknown>;
+  toolResult?: string;
+  toolStatus?: 'running' | 'done' | 'error';
   isStreaming?: boolean;
   isError?: boolean;
   timestamp: number;
@@ -35,6 +38,7 @@ interface ChatState {
   chatSessions: ChatSessionSummary[];
 
   addMessage: (msg: UIMessage) => void;
+  updateToolMessage: (toolCallId: string, update: Partial<UIMessage>) => void;
   updateStreamingContent: (content: string) => void;
   appendStreamingContent: (chunk: string) => void;
   finalizeAssistantMessage: (content: string) => void;
@@ -71,6 +75,13 @@ export const useChatStore = create<ChatState>((set) => ({
   addMessage: (msg) =>
     set((state) => ({ messages: [...state.messages, msg] })),
 
+  updateToolMessage: (toolCallId, update) =>
+    set((state) => ({
+      messages: state.messages.map(m =>
+        m.role === 'tool' && m.toolCallId === toolCallId ? { ...m, ...update } : m
+      ),
+    })),
+
   updateStreamingContent: (content) =>
     set({ streamingContent: content }),
 
@@ -89,7 +100,6 @@ export const useChatStore = create<ChatState>((set) => ({
         },
       ],
       streamingContent: '',
-      isLoading: false,
     })),
 
   setLoading: (loading) => set({ isLoading: loading }),

@@ -188,7 +188,8 @@ export type ExtensionMessage =
   | { type: 'benchmarksLoaded'; sources: BenchmarkSource[] }
   | { type: 'benchmarkError'; error: string }
   | { type: 'modelPoolUpdated'; modelPool: string[] }
-  | { type: 'indexingStatus'; state: 'idle' | 'indexing' | 'ready' | 'error'; filesIndexed?: number; totalFiles?: number; chunkCount?: number; error?: string };
+  | { type: 'indexingStatus'; state: 'idle' | 'indexing' | 'ready' | 'error'; filesIndexed?: number; totalFiles?: number; chunkCount?: number; error?: string }
+  | { type: 'agentLoopDone' };
 
 export type WebviewMessage =
   | { type: 'sendMessage'; content: string; attachments?: Attachment[] }

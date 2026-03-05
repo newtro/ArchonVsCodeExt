@@ -50,6 +50,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private client: OpenRouterClient;
   private agentLoop?: AgentLoop;
+  private isRunning = false;
+  private pendingSessionHistory?: ChatSessionMessage[];
   private models: ModelInfo[] = [];
   private selectedModelId = '';
   private context: vscode.ExtensionContext;
@@ -371,6 +373,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    // If the agent loop is already running, cancel it so we can inject the follow-up message.
+    // The loop keeps its conversation history, so the next run() continues seamlessly.
+    if (this.agentLoop && this.isRunning) {
+      this.agentLoop.cancel();
+      // Wait briefly for the current run() to finish
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
     // Build content with attachments
     let fullContent = content;
     if (attachments && attachments.length > 0) {
@@ -438,13 +448,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           onMessageComplete: (msg: ChatMessage) => this.postMessage({ type: 'messageComplete', message: msg }),
         },
       );
+
+      // Restore prior conversation history when loading a saved session
+      if (this.pendingSessionHistory) {
+        const history: ChatMessage[] = this.pendingSessionHistory.map(m => ({
+          id: m.id,
+          role: m.role === 'tool' ? 'assistant' : m.role,
+          content: m.content,
+          timestamp: m.timestamp,
+        }));
+        this.agentLoop.loadHistory(history);
+        this.pendingSessionHistory = undefined;
+      }
     }
 
+    this.isRunning = true;
     try {
       await this.agentLoop.run(content);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.postMessage({ type: 'error', error: msg });
+    } finally {
+      this.isRunning = false;
+      this.postMessage({ type: 'agentLoopDone' });
     }
   }
 
@@ -465,6 +491,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       },
       readFile: async (filePath: string) => {
         const uri = vscode.Uri.file(filePath);
+        // Prefer the editor buffer if the file is already open (picks up recent edits)
+        const openDoc = vscode.workspace.textDocuments.find(
+          (d) => d.uri.toString() === uri.toString(),
+        );
+        if (openDoc) {
+          return openDoc.getText();
+        }
         const content = await vscode.workspace.fs.readFile(uri);
         return Buffer.from(content).toString('utf-8');
       },
@@ -476,10 +509,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const doc = await vscode.workspace.openTextDocument(uri);
           const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
           edit.replace(uri, fullRange, content);
+          await vscode.workspace.applyEdit(edit);
+          await doc.save();
         } catch {
           edit.createFile(uri, { contents: Buffer.from(content, 'utf-8') });
+          await vscode.workspace.applyEdit(edit);
         }
-        await vscode.workspace.applyEdit(edit);
       },
       executeCommand: async (command: string) => {
         // Security gate for terminal commands
@@ -509,7 +544,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             resolve({
               stdout: stdout ?? '',
               stderr: stderr ?? '',
-              exitCode: error?.code ?? 0,
+              exitCode: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
             });
           });
         });
@@ -576,7 +611,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sessions = this.getChatSessions();
     const session = sessions.find(s => s.id === sessionId);
     if (session) {
+      // Reset the agent loop so a fresh one is created on next message,
+      // and store the session history to be loaded into it.
       this.agentLoop = undefined;
+      this.pendingSessionHistory = session.messages;
       this.postMessage({ type: 'chatSessionLoaded', session });
     }
   }

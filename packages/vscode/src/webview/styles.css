@@ -225,51 +225,95 @@ body {
 .message.assistant .message-content p:last-child { margin-bottom: 0; }
 
 /* Tool Messages */
-.message.tool {
-  background: var(--vscode-textBlockQuote-background, rgba(127, 127, 127, 0.1));
-  border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+/* ── Tool call (combined start + result) ── */
+.tc {
+  margin: 2px 0;
   border-radius: 4px;
-  padding: 6px 10px;
   font-size: 12px;
 }
 
-.message.tool.tool-error { border-left-color: var(--vscode-errorForeground, #f44747); }
-
-.tool-header {
+.tc-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  margin-bottom: 4px;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: default;
+  user-select: none;
+  min-height: 24px;
+}
+.tc-header[role="button"] { cursor: pointer; }
+.tc-header[role="button"]:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
 }
 
-.tool-name {
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--vscode-textLink-foreground, #3794ff);
+.tc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tc-done .tc-dot { background: var(--vscode-charts-green, #89d185); }
+.tc-error .tc-dot { background: var(--vscode-errorForeground, #f44747); }
+.tc-running .tc-dot {
+  background: var(--vscode-charts-yellow, #cca700);
+  animation: tc-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
-.tool-expand-btn {
-  background: none;
-  border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.3));
-  color: var(--vscode-foreground, #ccc);
+.tc-summary {
+  flex: 1;
+  color: var(--vscode-descriptionForeground, #999);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tc-summary code { font-size: inherit; }
+.tc-error .tc-summary { color: var(--vscode-errorForeground, #f44747); }
+
+.tc-chevron {
+  flex-shrink: 0;
+  opacity: 0.5;
+  transition: transform 0.15s ease;
+  display: flex;
+  align-items: center;
+}
+.tc-chevron-open { transform: rotate(180deg); }
+
+.tc-details {
+  padding: 0 8px 6px 21px; /* align with text after dot */
+}
+
+.tc-section { margin-top: 4px; }
+
+.tc-section-label {
   font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--vscode-descriptionForeground, #999);
   opacity: 0.7;
+  margin-bottom: 2px;
 }
-.tool-expand-btn:hover { opacity: 1; }
 
-.tool-output {
-  font-size: 12px;
+.tc-pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.2));
+  border-radius: 3px;
+  font-size: 11px;
   line-height: 1.4;
+  overflow-x: auto;
+  max-height: 300px;
   overflow-y: auto;
-  opacity: 0.9;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--vscode-editor-foreground, #ccc);
 }
-.tool-output p { margin: 4px 0; }
-.tool-output a { color: var(--vscode-textLink-foreground, #3794ff); }
-.tool-output strong { color: var(--vscode-foreground, #eee); }
 
 /* ── Code ── */
 .code-block {

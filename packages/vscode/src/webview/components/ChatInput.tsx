@@ -36,14 +36,14 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = useCallback(() => {
-    if (input.trim() && !isLoading && !disabled) {
+    if (input.trim() && !disabled) {
       onSend(input.trim(), attachments);
       setInput('');
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     }
-  }, [input, isLoading, disabled, onSend, attachments]);
+  }, [input, disabled, onSend, attachments]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showFilePicker) return; // Let FilePickerPopup handle keys
@@ -182,20 +182,19 @@ export function ChatInput({
             <PaperclipIcon />
           </button>
 
-          {isLoading ? (
+          {isLoading && (
             <button className="icon-btn stop-btn" onClick={onCancel} title="Stop">
               <StopIcon />
             </button>
-          ) : (
-            <button
-              className="icon-btn send-btn"
-              onClick={handleSubmit}
-              disabled={!input.trim() || disabled}
-              title="Send (Enter)"
-            >
-              <SendIcon />
-            </button>
           )}
+          <button
+            className="icon-btn send-btn"
+            onClick={handleSubmit}
+            disabled={!input.trim() || disabled}
+            title={isLoading ? 'Send follow-up (Enter)' : 'Send (Enter)'}
+          >
+            <SendIcon />
+          </button>
         </div>
       </div>
     </div>

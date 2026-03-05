@@ -154,7 +154,12 @@ const searchFilesTool: ToolDefinition = {
 
     const pattern = args.pattern as string;
     const includeGlob = args.include as string | undefined;
-    const regex = new RegExp(pattern, 'gi');
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern, 'i');
+    } catch (err) {
+      return `Invalid regex pattern: ${err instanceof Error ? err.message : String(err)}`;
+    }
     const results: string[] = [];
     const maxResults = 100;
 
@@ -190,7 +195,7 @@ function searchDirectory(
       if ([
         'node_modules', '.git', '.turbo', 'dist', 'out', '.next', '__pycache__',
         '.vs', '.vscode', '.idea', 'bin', 'obj', 'build', 'coverage', '.nyc_output',
-        'TestResults', '.archon', '.nuxt', 'target', 'vendor', 'packages',
+        'TestResults', '.archon', '.nuxt', 'target', 'vendor',
         '.playwright-mcp', '.augment', '.auto-claude', '.kilocode', '.serena', '.trae',
         'Application Files', 'publish', 'wwwroot',
       ].includes(entry.name)) continue;
@@ -215,7 +220,6 @@ function searchDirectory(
       const lines = content.split('\n');
       const relPath = path.relative(rootPath, fullPath);
       for (let i = 0; i < lines.length; i++) {
-        regex.lastIndex = 0;
         if (regex.test(lines[i])) {
           results.push(`${relPath}:${i + 1}: ${lines[i].trim()}`);
           if (results.length >= maxResults) return;
@@ -281,7 +285,7 @@ function findFilesRecursive(
       if ([
         'node_modules', '.git', '.turbo', 'dist', 'out', '.next', '__pycache__',
         '.vs', '.vscode', '.idea', 'bin', 'obj', 'build', 'coverage', '.nyc_output',
-        'TestResults', '.archon', '.nuxt', 'target', 'vendor', 'packages',
+        'TestResults', '.archon', '.nuxt', 'target', 'vendor',
         '.playwright-mcp', '.augment', '.auto-claude', '.kilocode', '.serena', '.trae',
         'Application Files', 'publish', 'wwwroot',
       ].includes(entry.name)) continue;

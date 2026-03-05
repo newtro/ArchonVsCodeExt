@@ -20,7 +20,7 @@ export function App() {
   const {
     messages, isLoading, streamingContent, selectedModelId, models,
     askUserRequest, error, attachments, workspaceFiles, chatSessions,
-    addMessage, appendStreamingContent, finalizeAssistantMessage,
+    addMessage, updateToolMessage, appendStreamingContent, finalizeAssistantMessage,
     setLoading, setModels, setSelectedModel, setAskUser, setError, clearMessages,
     addAttachment, removeAttachment, clearAttachments, setWorkspaceFiles,
     setChatSessions, setMessages,
@@ -82,37 +82,26 @@ export function App() {
           saveCurrentSession();
           break;
 
-        case 'toolCallStart': {
-          const argsStr = msg.toolCall.arguments && Object.keys(msg.toolCall.arguments).length > 0
-            ? '\n' + JSON.stringify(msg.toolCall.arguments, null, 2)
-            : '';
+        case 'toolCallStart':
           addMessage({
             id: msg.toolCall.id,
             role: 'tool',
-            content: `Calling: ${msg.toolCall.name}${argsStr}`,
+            content: '',
             toolName: msg.toolCall.name,
             toolCallId: msg.toolCall.id,
+            toolArgs: msg.toolCall.arguments,
+            toolStatus: 'running',
             timestamp: Date.now(),
           });
           break;
-        }
 
-        case 'toolCallResult': {
-          // Look up tool name from the matching toolCallStart message
-          const startMsg = useChatStore.getState().messages.find(
-            m => m.role === 'tool' && m.toolCallId === msg.result.toolCallId && m.toolName
-          );
-          addMessage({
-            id: Math.random().toString(36).slice(2, 11),
-            role: 'tool',
-            content: msg.result.content,
-            toolName: startMsg?.toolName,
-            toolCallId: msg.result.toolCallId,
+        case 'toolCallResult':
+          updateToolMessage(msg.result.toolCallId, {
+            toolResult: msg.result.content,
+            toolStatus: msg.result.isError ? 'error' : 'done',
             isError: msg.result.isError,
-            timestamp: Date.now(),
           });
           break;
-        }
 
         case 'modelsLoaded':
           setModels(msg.models);
@@ -183,6 +172,10 @@ export function App() {
           setModelPool(msg.modelPool);
           break;
 
+        case 'agentLoopDone':
+          setLoading(false);
+          break;
+
         case 'indexingStatus':
           setIndexingStatus({
             state: msg.state,
@@ -234,9 +227,11 @@ export function App() {
   };
 
   const handleSend = (content: string, sendAttachments: Attachment[]) => {
-    if (!content.trim() || isLoading) return;
+    if (!content.trim()) return;
     addMessage({ id: Math.random().toString(36).slice(2, 11), role: 'user', content, timestamp: Date.now() });
-    setLoading(true);
+    if (!isLoading) {
+      setLoading(true);
+    }
     setError(null);
     postMessage({ type: 'sendMessage', content, attachments: sendAttachments.length > 0 ? sendAttachments : undefined });
     clearAttachments();
@@ -330,7 +325,11 @@ export function App() {
       } else if (msg.role === 'tool') {
         const label = msg.toolName || 'tool';
         const errorTag = msg.isError ? ' [ERROR]' : '';
-        lines.push(`### Tool: ${label}${errorTag} [${time}]`, '', '```', msg.content, '```', '');
+        const argsStr = msg.toolArgs ? '\n' + JSON.stringify(msg.toolArgs, null, 2) : '';
+        lines.push(`### Tool: ${label}${errorTag} [${time}]`, '', '```', `Calling: ${label}${argsStr}`, '```', '');
+        if (msg.toolResult) {
+          lines.push(`### Tool: ${label} [${time}]`, '', '```', msg.toolResult, '```', '');
+        }
       }
     }
     if (streamingContent) {

@@ -11,7 +11,7 @@ export function PlusIcon() {
 }
 
 export function SendIcon() {
-  return <svg {...svgProps}><path d="M2 8l10-5-3 5 3 5z" fill="currentColor" stroke="none" /></svg>;
+  return <svg {...svgProps}><path d="M14 8L4 3l3 5-3 5z" fill="currentColor" stroke="none" /></svg>;
 }
 
 export function StopIcon() {
