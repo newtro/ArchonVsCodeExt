@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { marked } from 'marked';
 import type { UIMessage } from '../store';
 import { ChevronDownIcon } from './Icons';
@@ -13,6 +13,18 @@ marked.setOptions({
   gfm: true,
 });
 
+const COPY_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4 4h1V2a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-2v2a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h1zm1 1H3v8h6v-2H6a1 1 0 0 1-1-1V5zm1-2v7h6V2H6z"/></svg>';
+const CHECK_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>';
+
+// Custom renderer: wrap <pre> blocks with a container that includes a copy button
+const renderer = new marked.Renderer();
+const originalCode = renderer.code;
+renderer.code = function (this: marked.Renderer, code: marked.Tokens.Code): string {
+  const raw = originalCode.call(this, code);
+  return `<div class="code-block-wrapper">${raw}<button class="code-copy-btn" title="Copy to clipboard" aria-label="Copy code">${COPY_ICON_SVG}</button></div>`;
+};
+marked.use({ renderer });
+
 export function MessageBubble({ message }: Props) {
   const { role, content, isStreaming } = message;
 
@@ -22,6 +34,23 @@ export function MessageBubble({ message }: Props) {
 
   const renderedHtml = useMemo(() => renderMarkdown(content), [content]);
 
+  const handleCodeCopy = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const btn = (e.target as HTMLElement).closest('.code-copy-btn') as HTMLButtonElement | null;
+    if (!btn) return;
+    const wrapper = btn.closest('.code-block-wrapper');
+    const pre = wrapper?.querySelector('pre');
+    if (!pre) return;
+    const text = pre.textContent ?? '';
+    navigator.clipboard.writeText(text).then(() => {
+      btn.innerHTML = CHECK_ICON_SVG;
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.innerHTML = COPY_ICON_SVG;
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }, []);
+
   return (
     <div className={`message ${role}`}>
       {role === 'user' && <div className="message-role">You</div>}
@@ -29,6 +58,7 @@ export function MessageBubble({ message }: Props) {
         <div
           className="markdown-body"
           dangerouslySetInnerHTML={{ __html: renderedHtml }}
+          onClick={handleCodeCopy}
         />
         {isStreaming && <span className="cursor">|</span>}
       </div>
@@ -91,6 +121,14 @@ function toolSummary(name: string, args?: Record<string, unknown>): string {
     }
     case 'diff_view':
       return `Diff ${args.path ?? ''}`;
+    case 'skill_invoke':
+      return `Invoke skill /${args.name ?? ''}`;
+    case 'list_skills': {
+      const filter = args.filter as string | undefined;
+      return filter ? `List skills (${filter})` : 'List skills';
+    }
+    case 'create_skill':
+      return `Create skill /${args.name ?? ''}`;
     case 'todo_write': {
       const todoTitle = args.title as string ?? '';
       const todos = args.todos as unknown[] ?? [];

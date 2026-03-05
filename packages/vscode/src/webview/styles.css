@@ -439,6 +439,37 @@ body {
 }
 .markdown-body blockquote p { margin-bottom: 0; }
 
+.markdown-body .code-block-wrapper {
+  position: relative;
+}
+.markdown-body .code-block-wrapper:hover .code-copy-btn {
+  opacity: 1;
+}
+.markdown-body .code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--vscode-button-secondaryBackground, rgba(90, 93, 94, 0.6));
+  color: var(--vscode-button-secondaryForeground, #ccc);
+  border: none;
+  border-radius: 4px;
+  padding: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.markdown-body .code-copy-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(90, 93, 94, 0.9));
+}
+.markdown-body .code-copy-btn.copied {
+  color: var(--vscode-terminal-ansiGreen, #89d185);
+  opacity: 1;
+}
+
 .markdown-body pre {
   background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.2));
   border-radius: 4px;
@@ -720,6 +751,28 @@ body {
   border: 1px solid var(--vscode-notifications-border, #333);
   border-radius: 6px;
   margin: 8px;
+}
+
+.ask-user-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.ask-user-cancel {
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #999);
+  border: 1px solid var(--vscode-input-border, #444);
+  border-radius: 4px;
+  padding: 2px 10px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.ask-user-cancel:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255,255,255,0.08));
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-focusBorder, #007fd4);
 }
 
 .ask-user-prompt {

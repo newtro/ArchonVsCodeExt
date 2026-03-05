@@ -19,6 +19,8 @@ export interface SkillInvocationResult {
   hasScripts: boolean;
   /** The skill name. */
   skillName: string;
+  /** Absolute path to the skill file or directory. */
+  skillPath?: string;
   /** Error message if invocation failed. */
   error?: string;
 }
@@ -81,6 +83,7 @@ export class SkillExecutor {
       instructions,
       hasScripts: (skill.scripts?.length ?? 0) > 0,
       skillName,
+      skillPath: skill.path,
     };
   }
 

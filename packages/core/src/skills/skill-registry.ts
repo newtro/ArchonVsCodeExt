@@ -16,7 +16,6 @@ export type SkillEventHandler = (event: SkillEvent) => void;
 
 export class SkillRegistry {
   private summaries = new Map<string, SkillSummary>();
-  private fullCache = new Map<string, Skill>();
   private loader: SkillLoader;
   private listeners: SkillEventHandler[] = [];
   private initialized = false;
@@ -32,7 +31,6 @@ export class SkillRegistry {
   async initialize(): Promise<void> {
     const summaryList = await this.loader.loadAllSummaries();
     this.summaries.clear();
-    this.fullCache.clear();
     for (const s of summaryList) {
       this.summaries.set(s.name, s);
     }
@@ -78,15 +76,7 @@ export class SkillRegistry {
    * Load the full skill content (level 2 — body loaded).
    */
   async loadFull(name: string): Promise<Skill | null> {
-    // Check cache first
-    const cached = this.fullCache.get(name);
-    if (cached) return cached;
-
-    const skill = await this.loader.loadFull(name);
-    if (skill) {
-      this.fullCache.set(name, skill);
-    }
-    return skill;
+    return this.loader.loadFull(name);
   }
 
   /**

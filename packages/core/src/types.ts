@@ -312,6 +312,7 @@ export type WebviewMessage =
   | { type: 'newChat' }
   | { type: 'setApiKey'; key: string }
   | { type: 'askUserResponse'; id: string; response: string }
+  | { type: 'askUserCancel'; id: string }
   | { type: 'pickFile' }
   | { type: 'searchWorkspaceFiles'; query: string }
   | { type: 'setSecurityLevel'; level: string }

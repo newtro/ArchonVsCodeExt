@@ -74,7 +74,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private selectedModelId = '';
   private selectedPipelineId = 'default';
   private context: vscode.ExtensionContext;
-  private pendingAskUser: Map<string, (response: string) => void> = new Map();
+  private pendingAskUser: Map<string, { resolve: (response: string) => void; reject: (err: Error) => void }> = new Map();
   private securityManager: SecurityManager;
   private networkMonitor: NetworkMonitor;
   private diffViewManager: DiffViewManager;
@@ -359,6 +359,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.loadModels();
         break;
       case 'newChat':
+        // Reject any pending ask_user promises so they don't leak into the next chat
+        for (const [id, pending] of this.pendingAskUser) {
+          pending.reject(new Error('Chat ended'));
+        }
+        this.pendingAskUser.clear();
+        this.agentLoop?.cancel();
         this.agentLoop = undefined;
         this.pipelineExecutor = undefined;
         break;
@@ -368,11 +374,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.loadModels();
         break;
       case 'askUserResponse': {
-        const resolver = this.pendingAskUser.get(msg.id);
-        if (resolver) {
-          resolver(msg.response);
+        const pending = this.pendingAskUser.get(msg.id);
+        if (pending) {
+          pending.resolve(msg.response);
           this.pendingAskUser.delete(msg.id);
         }
+        break;
+      }
+      case 'askUserCancel': {
+        const pending = this.pendingAskUser.get(msg.id);
+        if (pending) {
+          pending.reject(new Error('User cancelled the question'));
+          this.pendingAskUser.delete(msg.id);
+        }
+        // Abort the running agent loop so the tool chain stops
+        this.agentLoop?.cancel();
         break;
       }
       case 'pickFile':
@@ -895,9 +911,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         onBranchComplete: (branchId, label) => this.postMessage({ type: 'parallelBranchComplete', branchId, label }),
         onParallelComplete: () => this.postMessage({ type: 'parallelComplete' }),
         askUser: (prompt, options, multiSelect) => {
-          return new Promise<string>((resolve) => {
+          return new Promise<string>((resolve, reject) => {
             const id = Math.random().toString(36).slice(2, 11);
-            this.pendingAskUser.set(id, resolve);
+            this.pendingAskUser.set(id, { resolve, reject });
             this.postMessage({ type: 'askUser', id, prompt, options, multiSelect });
           });
         },
@@ -964,9 +980,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.postMessage({ type: 'streamToken', token: { type: 'text', content: msg } });
       },
       askUser: (prompt: string, options?: AskUserOptionInput[], multiSelect?: boolean) => {
-        return new Promise<string>((resolve) => {
+        return new Promise<string>((resolve, reject) => {
           const id = Math.random().toString(36).slice(2, 11);
-          this.pendingAskUser.set(id, resolve);
+          this.pendingAskUser.set(id, { resolve, reject });
           this.postMessage({ type: 'askUser', id, prompt, options, multiSelect });
         });
       },

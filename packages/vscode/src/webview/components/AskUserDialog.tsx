@@ -5,13 +5,14 @@ import type { AskUserRequest, AskUserOption } from '../store';
 interface Props {
   request: AskUserRequest;
   onRespond: (response: string) => void;
+  onCancel: () => void;
 }
 
 function normalizeOption(opt: string | AskUserOption): AskUserOption {
   return typeof opt === 'string' ? { label: opt } : opt;
 }
 
-export function AskUserDialog({ request, onRespond }: Props) {
+export function AskUserDialog({ request, onRespond, onCancel }: Props) {
   const [customInput, setCustomInput] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -48,6 +49,11 @@ export function AskUserDialog({ request, onRespond }: Props) {
 
   return (
     <div className="ask-user-dialog">
+      <div className="ask-user-header">
+        <button className="ask-user-cancel" onClick={onCancel} title="Cancel this question and stop the agent">
+          Cancel
+        </button>
+      </div>
       <div
         className="ask-user-prompt markdown-body"
         dangerouslySetInnerHTML={{ __html: renderedPrompt }}

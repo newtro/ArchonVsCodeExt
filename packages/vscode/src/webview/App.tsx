@@ -529,6 +529,13 @@ export function App() {
     }
   };
 
+  const handleAskUserCancel = () => {
+    if (askUserRequest) {
+      postMessage({ type: 'askUserCancel', id: askUserRequest.id });
+      setAskUser(null);
+    }
+  };
+
   const [debugCopied, setDebugCopied] = useState(false);
 
   const formatMessageForTranscript = (msg: typeof messages[0], lines: string[]) => {
@@ -846,7 +853,7 @@ export function App() {
               }}
             />
           )}
-          {askUserRequest && <AskUserDialog request={askUserRequest} onRespond={handleAskUserResponse} />}
+          {askUserRequest && <AskUserDialog request={askUserRequest} onRespond={handleAskUserResponse} onCancel={handleAskUserCancel} />}
           <ChatInput
             onSend={handleSend}
             onCancel={handleCancel}

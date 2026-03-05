@@ -35,8 +35,9 @@ function createSkillInvokeTool(deps: SkillToolsDependencies): ToolDefinition {
   return {
     name: 'skill_invoke',
     description:
-      'Invoke a skill by name. This loads the skill\'s instructions and context into the current conversation. ' +
-      'Use this when a skill is relevant to the user\'s request, or when the user explicitly invokes a skill with /skill-name.',
+      'Invoke a skill by name to EXECUTE it. This loads the skill\'s instructions into the current conversation so you can follow them. ' +
+      'Use this when a skill is relevant to the user\'s request, or when the user explicitly invokes a skill with /skill-name. ' +
+      'Do NOT use this to edit a skill — to edit a skill, use list_skills to find its file path, then read_file and edit_file.',
     parameters: {
       type: 'object',
       properties: {
@@ -57,11 +58,16 @@ function createSkillInvokeTool(deps: SkillToolsDependencies): ToolDefinition {
 
       const lines = [
         `Skill "/${result.skillName}" activated.`,
-        '',
-        '--- SKILL INSTRUCTIONS ---',
-        result.instructions,
-        '--- END SKILL INSTRUCTIONS ---',
       ];
+
+      if (result.skillPath) {
+        lines.push(`Skill file: ${result.skillPath}`);
+      }
+
+      lines.push('');
+      lines.push('--- SKILL INSTRUCTIONS ---');
+      lines.push(result.instructions);
+      lines.push('--- END SKILL INSTRUCTIONS ---');
 
       if (result.hasScripts) {
         lines.push('');
@@ -165,7 +171,7 @@ function createCreateSkillTool(deps: SkillToolsDependencies): ToolDefinition {
 function createListSkillsTool(deps: SkillToolsDependencies): ToolDefinition {
   return {
     name: 'list_skills',
-    description: 'List all available skills with their names, descriptions, and status.',
+    description: 'List all available skills with their names, descriptions, status, and file paths. Use this to find a skill\'s file path when you need to read or edit its content.',
     parameters: {
       type: 'object',
       properties: {
@@ -199,7 +205,8 @@ function createListSkillsTool(deps: SkillToolsDependencies): ToolDefinition {
         const status = skill.enabled ? 'enabled' : 'disabled';
         const tags = skill.tags.length > 0 ? ` [${skill.tags.join(', ')}]` : '';
         const scope = skill.scope === 'global' ? '(global)' : '(project)';
-        lines.push(`- /${skill.name} ${scope} — ${skill.description} [${status}]${tags}`);
+        const filePath = skill.path ? ` | path: ${skill.path}` : '';
+        lines.push(`- /${skill.name} ${scope} — ${skill.description} [${status}]${tags}${filePath}`);
       }
 
       return lines.join('\n');
