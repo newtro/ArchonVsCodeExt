@@ -14,7 +14,13 @@ import {
   DEFAULT_PIPELINE,
   getBuiltInTemplates,
   PipelineStorage,
+  SkillRegistry,
+  SkillExecutor,
+  createSkillTools,
+  SkillVersionManager,
+  getBuiltInSkillTemplates,
 } from '@archon/core';
+import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput } from '@archon/core';
 import { CodebaseIndexer, ApiEmbeddingProvider } from '@archon/memory';
 import type {
   WebviewMessage,
@@ -35,6 +41,9 @@ import type {
   Pipeline,
   PipelineInfo,
   PipelineExecutionContext,
+  TodoItem,
+  TodoList,
+  TodoSummary,
 } from '@archon/core';
 import { createLspTools } from '../lsp/lsp-tools';
 import { DiffViewManager } from './diff-view';
@@ -50,6 +59,7 @@ Rules:
 - Use LSP tools (go_to_definition, find_references, get_hover_info, etc.) to understand code structure.
 - Use search_codebase for semantic code search when you need to find relevant code.
 - Explain your reasoning concisely.
+- Use the todo_write tool to plan and track progress when working on tasks with multiple steps.
 - When you have completed the task, use attempt_completion to summarize what you did.
 `;
 
@@ -73,6 +83,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private indexer: CodebaseIndexer | null = null;
   private indexingInProgress = false;
   private pipelineStorage: PipelineStorage;
+  private skillRegistry: SkillRegistry | null = null;
+  private skillExecutor: SkillExecutor | null = null;
+  private skillVersionManager = new SkillVersionManager();
+  private currentTodoList: TodoList | null = null;
+  private todoStatusBarItem: vscode.StatusBarItem;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -128,6 +143,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (workspaceRoot) {
       this.indexer = new CodebaseIndexer(workspaceRoot);
     }
+
+    // Initialize skills system
+    const userHome = process.env.USERPROFILE || process.env.HOME || '';
+    if (userHome) {
+      const skillConfig: SkillLoaderConfig = {
+        workspaceRoot: workspaceRoot || userHome,
+        userHome,
+      };
+      this.skillRegistry = new SkillRegistry(skillConfig);
+      this.skillRegistry.initialize().catch(err => {
+        console.warn('[Archon] Failed to initialize skill registry:', err);
+      });
+    }
+
+    // Initialize todo status bar item
+    this.todoStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
+    this.todoStatusBarItem.command = 'archon.focusChat';
+    context.subscriptions.push(this.todoStatusBarItem);
 
     // Forward network events to webview (as generic messages via postMessage)
     this.networkMonitor.onRequest((_req) => {
@@ -219,6 +252,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let prompt = SYSTEM_PROMPT;
     if (claudeMd) {
       prompt += `\n\n## Project Instructions (from CLAUDE.md)\n\n${claudeMd}`;
+    }
+    // Inject available skills context
+    if (this.skillRegistry?.isInitialized()) {
+      const skillsContext = this.skillRegistry.generateSystemPromptContext();
+      if (skillsContext) {
+        prompt += `\n\n${skillsContext}`;
+      }
     }
     return prompt;
   }
@@ -425,6 +465,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case 'enhancePrompt':
         this.handleEnhancePrompt(msg.nodeId, msg.prompt);
+        break;
+      // Skills management
+      case 'loadSkills':
+        this.sendSkillsList();
+        break;
+      case 'saveSkill':
+        this.handleSaveSkill(msg.skill);
+        break;
+      case 'deleteSkill':
+        this.handleDeleteSkill(msg.skillName);
+        break;
+      case 'toggleSkill':
+        this.handleToggleSkill(msg.skillName, msg.enabled);
+        break;
+      case 'refreshSkills':
+        if (this.skillRegistry) {
+          await this.skillRegistry.refresh();
+          this.sendSkillsList();
+        }
+        break;
+      case 'loadSkillContent':
+        this.handleLoadSkillContent(msg.skillName);
+        break;
+      case 'loadSkillTemplates':
+        this.handleLoadSkillTemplates();
+        break;
+      case 'loadSkillVersions':
+        this.handleLoadSkillVersions(msg.skillName);
+        break;
+      case 'loadSkillVersionContent':
+        this.handleLoadSkillVersionContent(msg.skillName, msg.versionPath, msg.version);
+        break;
+      case 'restoreSkillVersion':
+        this.handleRestoreSkillVersion(msg.skillName, msg.versionPath);
+        break;
+      case 'generateSkillFromConversation':
+        this.handleGenerateSkillFromConversation();
         break;
     }
   }
@@ -731,7 +808,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       },
     });
 
-    const allTools: ToolDefinition[] = [...coreTools, ...lspTools, ...extendedTools];
+    // Build skill tools if registry is available
+    let skillTools: ToolDefinition[] = [];
+    if (this.skillRegistry) {
+      const secLevel = this.context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict';
+      this.skillExecutor = new SkillExecutor(this.skillRegistry, {
+        securityLevel: secLevel,
+        askUser: toolContext.askUser,
+        executeCommand: toolContext.executeCommand,
+        readFile: toolContext.readFile,
+      });
+      skillTools = createSkillTools({
+        registry: this.skillRegistry,
+        executor: this.skillExecutor,
+      });
+    }
+
+    const allTools: ToolDefinition[] = [...coreTools, ...lspTools, ...extendedTools, ...skillTools];
+
+    // Detect slash command invocation: /skill-name [args]
+    // If the message starts with /, check if it matches a skill and prepend skill invocation
+    let skillPreamble = '';
+    if (content.startsWith('/') && this.skillRegistry && this.skillExecutor) {
+      const parts = content.slice(1).split(/\s+/, 2);
+      const skillName = parts[0];
+      const summary = this.skillRegistry.find(skillName);
+      if (summary?.enabled) {
+        const result = await this.skillExecutor.invoke(skillName);
+        if (!result.error && result.instructions) {
+          skillPreamble = `[Skill "/${skillName}" activated. Follow these instructions:]\n\n${result.instructions}\n\n[End of skill instructions. Now handle the user's request below.]\n\n`;
+          // Strip the /skill-name from the message, keep any arguments
+          content = parts[1] ? content.slice(skillName.length + 2) : `Execute the /${skillName} skill on the current context.`;
+        }
+      }
+    }
+    if (skillPreamble) {
+      content = skillPreamble + content;
+    }
 
     // Create git checkpoint before edit batch
     await this.gitCheckpoint.createCheckpoint('pre-archon-edit');
@@ -837,6 +950,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       this.isRunning = false;
       this.pipelineExecutor = undefined;
+      this.finalizeTodos();
       this.postMessage({ type: 'agentLoopDone' });
     }
   }
@@ -849,7 +963,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sendMessage: (msg: string) => {
         this.postMessage({ type: 'streamToken', token: { type: 'text', content: msg } });
       },
-      askUser: (prompt: string, options?: string[], multiSelect?: boolean) => {
+      askUser: (prompt: string, options?: AskUserOptionInput[], multiSelect?: boolean) => {
         return new Promise<string>((resolve) => {
           const id = Math.random().toString(36).slice(2, 11);
           this.pendingAskUser.set(id, resolve);
@@ -963,7 +1077,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sendPipelinesList();
         return result;
       },
+
+      // Todo management
+      updateTodos: (title: string | undefined, todos: TodoItem[]) => {
+        this.currentTodoList = {
+          title,
+          items: todos,
+          turnId: Date.now().toString(36),
+          startedAt: this.currentTodoList?.startedAt ?? Date.now(),
+        };
+        this.postMessage({ type: 'todosUpdated', title, todos });
+        this.updateTodoStatusBar(todos);
+      },
     };
+  }
+
+  private updateTodoStatusBar(todos: TodoItem[]): void {
+    const completed = todos.filter(t => t.status === 'completed').length;
+    this.todoStatusBarItem.text = `$(checklist) ${completed}/${todos.length} tasks`;
+    this.todoStatusBarItem.show();
+  }
+
+  private finalizeTodos(): void {
+    if (!this.currentTodoList) return;
+
+    const items = this.currentTodoList.items;
+    const summary: TodoSummary = {
+      title: this.currentTodoList.title,
+      total: items.length,
+      completed: items.filter(t => t.status === 'completed').length,
+      error: items.filter(t => t.status === 'error').length,
+      skipped: items.filter(t => t.status === 'skipped').length,
+      abandoned: items.filter(t => t.status === 'pending' || t.status === 'in_progress').length,
+    };
+
+    this.postMessage({ type: 'todosTurnComplete', summary });
+    this.currentTodoList = null;
+    this.todoStatusBarItem.hide();
   }
 
   // ── Chat Session Storage ──
@@ -1310,6 +1460,262 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       lastFetched: Date.now(),
       entries: sorted,
     };
+  }
+
+  // ── Skills Management ──
+
+  private sendSkillsList(): void {
+    if (!this.skillRegistry) {
+      this.postMessage({ type: 'skillsLoaded', skills: [] });
+      return;
+    }
+    const summaries = this.skillRegistry.getAll();
+    const skills: SkillInfo[] = summaries.map(s => ({
+      name: s.name,
+      description: s.description,
+      scope: s.scope,
+      enabled: s.enabled,
+      tags: s.tags,
+      type: s.type,
+      trigger: s.trigger,
+      modelInvocable: s.modelInvocable,
+      hasScripts: s.type === 'rich',
+      path: s.path,
+    }));
+    this.postMessage({ type: 'skillsLoaded', skills });
+  }
+
+  private async handleSaveSkill(skill: {
+    name: string; description: string; scope: 'global' | 'project';
+    enabled: boolean; tags: string[]; content: string;
+    trigger?: string; modelInvocable?: boolean;
+  }): Promise<void> {
+    if (!this.skillRegistry) {
+      this.postMessage({ type: 'skillError', error: 'Skill system not initialized' });
+      return;
+    }
+    try {
+      const loader = this.skillRegistry.getLoader();
+      const dir = skill.scope === 'project' ? loader.getProjectDir() : loader.getGlobalDir();
+      const filePath = path.join(dir, `${skill.name}.md`);
+
+      const tagsLine = skill.tags.length > 0 ? `\ntags: [${skill.tags.join(', ')}]` : '';
+      const triggerLine = skill.trigger ? `\ntrigger: ${skill.trigger}` : '';
+      const modelLine = skill.modelInvocable === false ? '\nmodel-invocable: false' : '';
+
+      const fileContent = [
+        '---',
+        `name: ${skill.name}`,
+        `description: ${skill.description}`,
+        `scope: ${skill.scope}`,
+        `enabled: ${skill.enabled}${tagsLine}${triggerLine}${modelLine}`,
+        'version: 1',
+        '---',
+        '',
+        skill.content,
+      ].join('\n');
+
+      fs.mkdirSync(dir, { recursive: true });
+
+      // Save version snapshot before overwriting (if skill already exists)
+      if (fs.existsSync(filePath)) {
+        this.skillVersionManager.saveVersion(filePath, skill.name);
+      }
+
+      fs.writeFileSync(filePath, fileContent, 'utf-8');
+
+      await this.skillRegistry.refresh();
+      this.postMessage({ type: 'skillSaved', skillName: skill.name });
+      this.sendSkillsList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'skillError', error: `Failed to save skill: ${msg}` });
+    }
+  }
+
+  private async handleDeleteSkill(skillName: string): Promise<void> {
+    if (!this.skillRegistry) return;
+    const summary = this.skillRegistry.find(skillName);
+    if (!summary) {
+      this.postMessage({ type: 'skillError', error: `Skill "${skillName}" not found` });
+      return;
+    }
+    try {
+      if (fs.existsSync(summary.path)) {
+        const stat = fs.statSync(summary.path);
+        if (stat.isDirectory()) {
+          fs.rmSync(summary.path, { recursive: true });
+        } else {
+          fs.unlinkSync(summary.path);
+        }
+      }
+      await this.skillRegistry.refresh();
+      this.postMessage({ type: 'skillDeleted', skillName });
+      this.sendSkillsList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'skillError', error: `Failed to delete skill: ${msg}` });
+    }
+  }
+
+  private async handleToggleSkill(skillName: string, enabled: boolean): Promise<void> {
+    if (!this.skillRegistry) return;
+    const summary = this.skillRegistry.find(skillName);
+    if (!summary) return;
+    try {
+      // Read the file, toggle the enabled field, write back
+      const filePath = summary.type === 'rich'
+        ? path.join(summary.path, 'SKILL.md')
+        : summary.path;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const updated = content.replace(
+        /^(enabled:\s*)(true|false)/m,
+        `$1${enabled}`
+      );
+      fs.writeFileSync(filePath, updated, 'utf-8');
+      await this.skillRegistry.refresh();
+      this.postMessage({ type: 'skillToggled', skillName, enabled });
+      this.sendSkillsList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'skillError', error: `Failed to toggle skill: ${msg}` });
+    }
+  }
+
+  private async handleLoadSkillContent(skillName: string): Promise<void> {
+    if (!this.skillRegistry) return;
+    const skill = await this.skillRegistry.loadFull(skillName);
+    if (skill && skill.body !== null) {
+      this.postMessage({ type: 'skillContentLoaded', skillName, content: skill.body });
+    } else {
+      this.postMessage({ type: 'skillContentLoaded', skillName, content: '' });
+    }
+  }
+
+  private handleLoadSkillTemplates(): void {
+    const templates = getBuiltInSkillTemplates();
+    this.postMessage({ type: 'skillTemplatesLoaded', templates });
+  }
+
+  private handleLoadSkillVersions(skillName: string): void {
+    if (!this.skillRegistry) return;
+    const summary = this.skillRegistry.find(skillName);
+    if (!summary) return;
+    const versions = this.skillVersionManager.listVersions(summary.path, skillName);
+    this.postMessage({ type: 'skillVersionsLoaded', skillName, versions });
+  }
+
+  private handleLoadSkillVersionContent(skillName: string, versionPath: string, version: number): void {
+    const content = this.skillVersionManager.readVersion(versionPath);
+    if (content) {
+      this.postMessage({ type: 'skillVersionContent', skillName, version, content });
+    }
+  }
+
+  private async handleRestoreSkillVersion(skillName: string, versionPath: string): Promise<void> {
+    if (!this.skillRegistry) return;
+    const summary = this.skillRegistry.find(skillName);
+    if (!summary) return;
+    const success = this.skillVersionManager.restoreVersion(summary.path, skillName, versionPath);
+    if (success) {
+      await this.skillRegistry.refresh();
+      this.postMessage({ type: 'skillVersionRestored', skillName });
+      this.sendSkillsList();
+    } else {
+      this.postMessage({ type: 'skillError', error: `Failed to restore version for "${skillName}"` });
+    }
+  }
+
+  private async handleGenerateSkillFromConversation(): Promise<void> {
+    // Build a summary of the conversation for the AI to analyze
+    const messages = this.agentLoop?.getMessages?.() ?? [];
+
+    // Collect the last several user and assistant messages
+    const recentMessages: string[] = [];
+    const allMsgs = messages.length > 0
+      ? messages
+      : []; // fallback if no agent loop
+
+    // Use a simple heuristic: grab last 10 user/assistant turns
+    const relevant = allMsgs.slice(-20).filter(
+      (m: { role: string }) => m.role === 'user' || m.role === 'assistant'
+    );
+
+    for (const m of relevant) {
+      const role = (m as { role: string }).role;
+      const content = (m as { content: string }).content;
+      if (content) {
+        recentMessages.push(`${role}: ${content.slice(0, 500)}`);
+      }
+    }
+
+    if (recentMessages.length === 0) {
+      // Fallback: generate a basic template
+      this.postMessage({
+        type: 'conversationSkillGenerated',
+        skill: {
+          name: 'my-skill',
+          description: 'A skill generated from this conversation',
+          tags: [],
+          content: '# My Skill\n\nDescribe what this skill should do.\n\n## Steps\n1. Step one\n2. Step two\n3. Step three',
+        },
+      });
+      return;
+    }
+
+    // Use the AI to extract a skill from the conversation
+    const extractionPrompt = [
+      'Analyze the following conversation and extract a reusable skill from it.',
+      'Return ONLY a JSON object with these fields: name (lowercase-hyphenated), description (1 sentence), tags (array of strings), content (markdown instructions).',
+      'The content should be generalized instructions that could be reused in future conversations.',
+      'Do not include any text outside the JSON object.',
+      '',
+      'Conversation:',
+      ...recentMessages,
+    ].join('\n');
+
+    try {
+      const text = await this.client.simpleChat(
+        this.selectedModelId,
+        [{ role: 'user', content: extractionPrompt }],
+        0.3,
+      );
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        this.postMessage({
+          type: 'conversationSkillGenerated',
+          skill: {
+            name: String(parsed.name || 'my-skill').replace(/[^a-z0-9-]/g, '').slice(0, 64),
+            description: String(parsed.description || '').slice(0, 1024),
+            tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : [],
+            content: String(parsed.content || ''),
+          },
+        });
+      } else {
+        // Couldn't parse — use fallback
+        this.postMessage({
+          type: 'conversationSkillGenerated',
+          skill: {
+            name: 'my-skill',
+            description: 'A skill generated from this conversation',
+            tags: [],
+            content: text || '# My Skill\n\nDescribe what this skill should do.',
+          },
+        });
+      }
+    } catch (err) {
+      // Fallback on error
+      this.postMessage({
+        type: 'conversationSkillGenerated',
+        skill: {
+          name: 'my-skill',
+          description: 'A skill generated from this conversation',
+          tags: [],
+          content: '# My Skill\n\nDescribe what this skill should do.\n\n## Steps\n1. Step one\n2. Step two',
+        },
+      });
+    }
   }
 
   private postMessage(msg: ExtensionMessage): void {

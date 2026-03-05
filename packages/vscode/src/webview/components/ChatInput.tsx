@@ -125,21 +125,6 @@ export function ChatInput({
 
   return (
     <div className="chat-input">
-      {/* Attachment chips */}
-      {attachments.length > 0 && (
-        <div className="attachment-row">
-          {attachments.map(a => (
-            <AttachmentChip
-              key={a.id}
-              name={a.name}
-              type={a.type}
-              dataUri={a.dataUri}
-              onRemove={() => onRemoveAttachment(a.id)}
-            />
-          ))}
-        </div>
-      )}
-
       {/* File picker popup */}
       {showFilePicker && (
         <FilePickerPopup
@@ -150,68 +135,87 @@ export function ChatInput({
         />
       )}
 
-      {/* Textarea */}
-      <textarea
-        ref={textareaRef}
-        value={input}
-        onChange={handleInput}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        placeholder={disabled ? 'Set API key to start...' : 'Type a message... (@ to attach file)'}
-        disabled={disabled}
-        rows={1}
-      />
+      <div className="chat-input-card">
+        {/* Attachment chips */}
+        {attachments.length > 0 && (
+          <div className="attachment-row">
+            {attachments.map(a => (
+              <AttachmentChip
+                key={a.id}
+                name={a.name}
+                type={a.type}
+                dataUri={a.dataUri}
+                onRemove={() => onRemoveAttachment(a.id)}
+              />
+            ))}
+          </div>
+        )}
 
-      {/* Toolbar: model selector + actions */}
-      <div className="input-toolbar">
-        <select
-          className="input-model-selector"
-          value={selectedModelId}
-          onChange={(e) => onModelChange(e.target.value)}
-          title="Select model"
-        >
-          {!selectedModelId && <option value="">Model...</option>}
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>{m.name}</option>
-          ))}
-        </select>
+        {/* Textarea */}
+        <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={handleInput}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={disabled ? 'Set API key to start...' : 'Type a message... (@ to attach file)'}
+          disabled={disabled}
+          rows={1}
+        />
 
-        <select
-          className="input-pipeline-selector"
-          value={selectedPipelineId}
-          onChange={(e) => onPipelineChange(e.target.value)}
-          title="Select pipeline"
-          disabled={isLoading}
-        >
-          {pipelines.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-          {pipelines.length === 0 && <option value="default">Default</option>}
-        </select>
+        {/* Bottom bar: selectors + actions */}
+        <div className="input-bottom-bar">
+          <div className="input-selectors">
+            <select
+              className="input-model-selector"
+              value={selectedModelId}
+              onChange={(e) => onModelChange(e.target.value)}
+              title="Select model"
+            >
+              {!selectedModelId && <option value="">Model...</option>}
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
 
-        <div className="input-actions">
-          <button
-            className="icon-btn"
-            onClick={onPickFile}
-            title="Attach file"
-            disabled={disabled}
-          >
-            <PaperclipIcon />
-          </button>
+            <select
+              className="input-pipeline-selector"
+              value={selectedPipelineId}
+              onChange={(e) => onPipelineChange(e.target.value)}
+              title="Select pipeline"
+              disabled={isLoading}
+            >
+              {pipelines.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+              {pipelines.length === 0 && <option value="default">Default</option>}
+            </select>
+          </div>
 
-          {isLoading && (
-            <button className="icon-btn stop-btn" onClick={onCancel} title="Stop">
-              <StopIcon />
+          <div className="input-actions">
+            <button
+              className="icon-btn"
+              onClick={onPickFile}
+              title="Attach file"
+              disabled={disabled}
+            >
+              <PaperclipIcon />
             </button>
-          )}
-          <button
-            className="icon-btn send-btn"
-            onClick={handleSubmit}
-            disabled={!input.trim() || disabled}
-            title={isLoading ? 'Send follow-up (Enter)' : 'Send (Enter)'}
-          >
-            <SendIcon />
-          </button>
+
+            {isLoading && (
+              <button className="icon-btn stop-btn" onClick={onCancel} title="Stop">
+                <StopIcon />
+              </button>
+            )}
+            <button
+              className="send-btn"
+              onClick={handleSubmit}
+              disabled={!input.trim() || disabled}
+              title={isLoading ? 'Send follow-up (Enter)' : 'Send (Enter)'}
+            >
+              <SendIcon />
+            </button>
+          </div>
         </div>
       </div>
     </div>

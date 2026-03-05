@@ -18,6 +18,8 @@ interface Props {
   hasBraveApiKey: boolean;
   webSearchEnabled: boolean;
   onWebSearchToggle: (enabled: boolean) => void;
+  todoDisplayMode: 'pinned' | 'inline' | 'floating';
+  onTodoDisplayModeChange: (mode: 'pinned' | 'inline' | 'floating') => void;
 }
 
 export function SettingsPanel({
@@ -32,6 +34,8 @@ export function SettingsPanel({
   hasBraveApiKey,
   webSearchEnabled,
   onWebSearchToggle,
+  todoDisplayMode,
+  onTodoDisplayModeChange,
 }: Props) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [braveKeyInput, setBraveKeyInput] = useState('');
@@ -194,6 +198,31 @@ export function SettingsPanel({
           />
           Enable interaction archive (stores all messages for semantic search)
         </label>
+      </section>
+
+      {/* Todo Display Mode */}
+      <section className="settings-section">
+        <h4>Todo List Display</h4>
+        <p className="settings-hint">How the agent's task list is shown during multi-step work.</p>
+        <div className="settings-radio-group">
+          {([
+            { id: 'pinned' as const, desc: 'Fixed panel above the chat messages.' },
+            { id: 'inline' as const, desc: 'Appears in the chat message stream.' },
+            { id: 'floating' as const, desc: 'Floating overlay in the bottom-right corner.' },
+          ]).map(({ id, desc }) => (
+            <label key={id} className="settings-radio">
+              <input
+                type="radio"
+                name="todoDisplay"
+                value={id}
+                checked={todoDisplayMode === id}
+                onChange={() => onTodoDisplayModeChange(id)}
+              />
+              <span className="radio-label">{id}</span>
+              <span className="radio-desc">{desc}</span>
+            </label>
+          ))}
+        </div>
       </section>
 
       {/* Model Pool */}

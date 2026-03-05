@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import type { ModelInfo, Attachment, ChatSessionSummary } from '@archon/core';
+import type { ModelInfo, Attachment, ChatSessionSummary, TodoItem, TodoSummary } from '@archon/core';
 
 export interface UIMessage {
   id: string;
@@ -28,6 +28,9 @@ export interface UIMessage {
     toolResult?: string;
     isError?: boolean;
   }>;
+  /** Inline todo snapshot data (for __todo_inline__ marker messages) */
+  todoItems?: TodoItem[];
+  todoTitle?: string;
 }
 
 export interface ParallelBranchState {
@@ -46,10 +49,15 @@ export interface ParallelGroupState {
   status: 'running' | 'completed';
 }
 
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
 export interface AskUserRequest {
   id: string;
   prompt: string;
-  options?: string[];
+  options?: (string | AskUserOption)[];
   multiSelect?: boolean;
 }
 
@@ -68,6 +76,8 @@ interface ChatState {
   parallelGroup: ParallelGroupState | null;
   /** Completed parallel groups stored as messages for the chat history */
   completedParallelGroups: ParallelGroupState[];
+  /** Active todo list (null when no todos are being tracked) */
+  todoList: { title?: string; items: TodoItem[] } | null;
 
   addMessage: (msg: UIMessage) => void;
   updateToolMessage: (toolCallId: string, update: Partial<UIMessage>) => void;
@@ -96,6 +106,11 @@ interface ChatState {
   completeBranch: (branchId: string) => void;
   setBranchError: (branchId: string, error: string) => void;
   completeParallelGroup: () => void;
+
+  // Todo actions
+  setTodoList: (title: string | undefined, items: TodoItem[]) => void;
+  addTodoSnapshot: (title: string | undefined, items: TodoItem[]) => void;
+  completeTodoTurn: (summary: TodoSummary) => void;
 }
 
 function generateId(): string {
@@ -115,6 +130,7 @@ export const useChatStore = create<ChatState>((set) => ({
   chatSessions: [],
   parallelGroup: null,
   completedParallelGroups: [],
+  todoList: null,
 
   addMessage: (msg) =>
     set((state) => ({ messages: [...state.messages, msg] })),
@@ -156,7 +172,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setError: (error) => set({ error }),
 
-  clearMessages: () => set({ messages: [], streamingContent: '', error: null, parallelGroup: null, completedParallelGroups: [] }),
+  clearMessages: () => set({ messages: [], streamingContent: '', error: null, parallelGroup: null, completedParallelGroups: [], todoList: null }),
 
   addAttachment: (attachment) =>
     set((state) => ({ attachments: [...state.attachments, attachment] })),
@@ -170,7 +186,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setChatSessions: (sessions) => set({ chatSessions: sessions }),
 
-  setMessages: (messages) => set({ messages, streamingContent: '', error: null, isLoading: false, parallelGroup: null, completedParallelGroups: [] }),
+  setMessages: (messages) => set({ messages, streamingContent: '', error: null, isLoading: false, parallelGroup: null, completedParallelGroups: [], todoList: null }),
 
   // ── Parallel branch actions ──
 
@@ -312,6 +328,50 @@ export const useChatStore = create<ChatState>((set) => ({
         messages: [...state.messages, marker],
         parallelGroup: null,
         completedParallelGroups: [...state.completedParallelGroups, completed],
+      };
+    }),
+
+  // ── Todo actions ──
+
+  setTodoList: (title, items) =>
+    set({ todoList: { title, items } }),
+
+  addTodoSnapshot: (title, items) =>
+    set((state) => {
+      const snapshot: UIMessage = {
+        id: `todo-inline-${generateId()}`,
+        role: 'tool',
+        content: '',
+        toolName: '__todo_inline__',
+        toolStatus: 'done',
+        timestamp: Date.now(),
+        todoItems: items,
+        todoTitle: title,
+      };
+      return { messages: [...state.messages, snapshot] };
+    }),
+
+  completeTodoTurn: (summary) =>
+    set((state) => {
+      const label = summary.title ? `${summary.title}: ` : '';
+      const parts: string[] = [];
+      if (summary.completed) parts.push(`${summary.completed} completed`);
+      if (summary.error) parts.push(`${summary.error} error`);
+      if (summary.skipped) parts.push(`${summary.skipped} skipped`);
+      if (summary.abandoned) parts.push(`${summary.abandoned} abandoned`);
+      const detail = parts.length > 0 ? parts.join(', ') : 'no items';
+
+      const summaryMsg: UIMessage = {
+        id: `todo-summary-${generateId()}`,
+        role: 'tool',
+        content: `${label}${summary.completed}/${summary.total} tasks completed (${detail})`,
+        toolName: '__todo_summary__',
+        toolStatus: 'done',
+        timestamp: Date.now(),
+      };
+      return {
+        messages: [...state.messages, summaryMsg],
+        todoList: null,
       };
     }),
 }));

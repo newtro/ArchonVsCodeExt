@@ -2,7 +2,7 @@
  * Tool registry — defines and manages all available tools.
  */
 
-import type { ToolDefinition, ToolContext } from '../types';
+import type { ToolDefinition, ToolContext, TodoItem, TodoStatus } from '../types';
 import type { Pipeline, PipelineNode, PipelineEdge, NodeType } from '../pipeline/types';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -27,6 +27,7 @@ export function createCoreTools(): ToolDefinition[] {
     editPipelineTool,
     listPipelinesTool,
     deletePipelineTool,
+    todoWriteTool,
   ];
 }
 
@@ -420,7 +421,7 @@ const askUserTool: ToolDefinition = {
       question: { type: 'string', description: 'The question to ask the user. Supports markdown formatting.' },
       options: {
         type: 'array',
-        description: 'Predefined answer options. In single-select mode (default), shown as clickable buttons — clicking one sends it immediately. In multi-select mode, shown as checkboxes — the user checks one or more and clicks Submit. The user can always type a custom response instead.',
+        description: 'Predefined answer options. Each can be a plain string OR an object { "label": "Short title", "description": "Detail text shown below the label" }. Prefer the object form with descriptions when extra context helps the user decide. In single-select mode (default), shown as clickable cards. In multi-select mode, shown as checkboxes. The user can always type a custom response instead.',
         items: { type: 'string' },
       },
       multiSelect: {
@@ -433,7 +434,7 @@ const askUserTool: ToolDefinition = {
   execute: async (args, ctx) => {
     const response = await ctx.askUser(
       args.question as string,
-      args.options as string[] | undefined,
+      args.options as import('../types').AskUserOptionInput[] | undefined,
       args.multiSelect as boolean | undefined,
     );
     return `User responded: ${response}`;
@@ -684,6 +685,72 @@ const deletePipelineTool: ToolDefinition = {
     return deleted
       ? `Pipeline "${id}" deleted successfully.`
       : `Could not delete pipeline "${id}". It may be a built-in pipeline or does not exist.`;
+  },
+};
+
+// ── todo_write ──
+
+const VALID_TODO_STATUSES: TodoStatus[] = ['pending', 'in_progress', 'completed', 'error', 'skipped'];
+const MAX_TODO_ITEMS = 20;
+
+const todoWriteTool: ToolDefinition = {
+  name: 'todo_write',
+  description: `Create or update a todo list to plan and track progress on multi-step tasks. Call this at the start of complex work to outline your plan, then call it again as you complete each step. Each call replaces the entire list.
+
+Statuses: pending, in_progress, completed, error, skipped.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Optional label for this todo list (e.g., "Refactoring auth module")' },
+      todos: {
+        type: 'array',
+        description: 'The complete todo list. Each call replaces the entire list.',
+        items: { type: 'object' },
+      },
+    },
+    required: ['todos'],
+  },
+  execute: async (args, ctx) => {
+    const rawTodos = args.todos as Array<Record<string, unknown>>;
+    const title = args.title as string | undefined;
+
+    if (rawTodos.length > MAX_TODO_ITEMS) {
+      return `Error: Too many items (${rawTodos.length}). Maximum is ${MAX_TODO_ITEMS}.`;
+    }
+
+    const todos: TodoItem[] = [];
+    for (const raw of rawTodos) {
+      if (!raw.id || !raw.content || !raw.status) {
+        return `Error: Each todo must have id, content, and status. Got: ${JSON.stringify(raw)}`;
+      }
+      if (!VALID_TODO_STATUSES.includes(raw.status as TodoStatus)) {
+        return `Error: Invalid status "${raw.status}". Valid: ${VALID_TODO_STATUSES.join(', ')}`;
+      }
+      todos.push({
+        id: String(raw.id),
+        content: String(raw.content),
+        status: raw.status as TodoStatus,
+      });
+    }
+
+    if (ctx.updateTodos) {
+      ctx.updateTodos(title, todos);
+    }
+
+    const counts = { completed: 0, in_progress: 0, error: 0, skipped: 0, pending: 0 };
+    for (const t of todos) {
+      counts[t.status]++;
+    }
+
+    const parts: string[] = [`Todo list updated (${todos.length} items)`];
+    if (title) parts[0] = `${title}: ${parts[0]}`;
+    if (counts.completed) parts.push(`${counts.completed} completed`);
+    if (counts.in_progress) parts.push(`${counts.in_progress} in progress`);
+    if (counts.error) parts.push(`${counts.error} error`);
+    if (counts.skipped) parts.push(`${counts.skipped} skipped`);
+    if (counts.pending) parts.push(`${counts.pending} pending`);
+
+    return parts.join(', ');
   },
 };
 

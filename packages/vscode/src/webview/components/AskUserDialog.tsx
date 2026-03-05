@@ -1,10 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { marked } from 'marked';
-import type { AskUserRequest } from '../store';
+import type { AskUserRequest, AskUserOption } from '../store';
 
 interface Props {
   request: AskUserRequest;
   onRespond: (response: string) => void;
+}
+
+function normalizeOption(opt: string | AskUserOption): AskUserOption {
+  return typeof opt === 'string' ? { label: opt } : opt;
 }
 
 export function AskUserDialog({ request, onRespond }: Props) {
@@ -19,13 +23,18 @@ export function AskUserDialog({ request, onRespond }: Props) {
   const hasOptions = request.options && request.options.length > 0;
   const isMultiSelect = request.multiSelect === true;
 
-  const toggleOption = (opt: string) => {
+  const normalizedOptions = useMemo(
+    () => (request.options ?? []).map(normalizeOption),
+    [request.options],
+  );
+
+  const toggleOption = (label: string) => {
     setSelected(prev => {
       const next = new Set(prev);
-      if (next.has(opt)) {
-        next.delete(opt);
+      if (next.has(label)) {
+        next.delete(label);
       } else {
-        next.add(opt);
+        next.add(label);
       }
       return next;
     });
@@ -46,14 +55,22 @@ export function AskUserDialog({ request, onRespond }: Props) {
 
       {hasOptions && isMultiSelect && (
         <div className="ask-user-multi-select">
-          {request.options!.map((opt, i) => (
-            <label key={i} className="ask-user-checkbox">
+          {normalizedOptions.map((opt, i) => (
+            <label
+              key={i}
+              className={`ask-user-option-card${selected.has(opt.label) ? ' selected' : ''}`}
+            >
               <input
                 type="checkbox"
-                checked={selected.has(opt)}
-                onChange={() => toggleOption(opt)}
+                checked={selected.has(opt.label)}
+                onChange={() => toggleOption(opt.label)}
               />
-              <span>{opt}</span>
+              <div className="ask-user-option-text">
+                <span className="ask-user-option-label">{opt.label}</span>
+                {opt.description && (
+                  <span className="ask-user-option-desc">{opt.description}</span>
+                )}
+              </div>
             </label>
           ))}
           <button
@@ -68,9 +85,18 @@ export function AskUserDialog({ request, onRespond }: Props) {
 
       {hasOptions && !isMultiSelect && (
         <div className="ask-user-options">
-          {request.options!.map((opt, i) => (
-            <button key={i} onClick={() => onRespond(opt)}>
-              {opt}
+          {normalizedOptions.map((opt, i) => (
+            <button
+              key={i}
+              className="ask-user-option-card"
+              onClick={() => onRespond(opt.label)}
+            >
+              <div className="ask-user-option-text">
+                <span className="ask-user-option-label">{opt.label}</span>
+                {opt.description && (
+                  <span className="ask-user-option-desc">{opt.description}</span>
+                )}
+              </div>
             </button>
           ))}
         </div>

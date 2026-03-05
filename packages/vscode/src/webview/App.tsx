@@ -10,12 +10,15 @@ import { NetworkMonitorPanel } from './components/NetworkMonitorPanel';
 import type { NetworkRequestUI } from './components/NetworkMonitorPanel';
 import { BenchmarkDashboard } from './components/BenchmarkDashboard';
 import { SettingsPanel } from './components/SettingsPanel';
+import { SkillsPanel } from './components/SkillsPanel';
+import { ConvertToSkillWizard } from './components/ConvertToSkillWizard';
 import { ChatHistoryDropdown } from './components/ChatHistoryDropdown';
 import { ParallelBranchGroup } from './components/ParallelBranchGroup';
+import { TodoListWidget } from './components/TodoListWidget';
 import { PlusIcon, ClipboardIcon, RefreshIcon } from './components/Icons';
-import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo } from '@archon/core';
+import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary } from '@archon/core';
 
-type Tab = 'chat' | 'pipeline' | 'network' | 'benchmarks' | 'settings';
+type Tab = 'chat' | 'pipeline' | 'skills' | 'network' | 'benchmarks' | 'settings';
 
 /** All tool names available in the extension (core + LSP + extended). */
 const AVAILABLE_TOOLS = [
@@ -24,7 +27,7 @@ const AVAILABLE_TOOLS = [
   'go_to_definition', 'find_references', 'get_hover_info',
   'get_workspace_symbols', 'get_document_symbols', 'get_code_actions', 'get_diagnostics',
   'web_search', 'web_fetch', 'lookup_docs', 'search_codebase',
-  'search_history', 'spawn_agent', 'diff_view', 'tool_search',
+  'search_history', 'spawn_agent', 'diff_view', 'tool_search', 'todo_write',
 ];
 
 export function App() {
@@ -32,12 +35,14 @@ export function App() {
     messages, isLoading, streamingContent, selectedModelId, models,
     askUserRequest, error, attachments, workspaceFiles, chatSessions,
     parallelGroup, completedParallelGroups,
+    todoList,
     addMessage, updateToolMessage, appendStreamingContent, finalizeAssistantMessage,
     setLoading, setModels, setSelectedModel, setAskUser, setError, clearMessages,
     addAttachment, removeAttachment, clearAttachments, setWorkspaceFiles,
     setChatSessions, setMessages,
     startParallelGroup, appendBranchStreamingContent, finalizeBranchAssistantMessage,
     addBranchMessage, updateBranchToolMessage, completeBranch, setBranchError, completeParallelGroup,
+    setTodoList, addTodoSnapshot, completeTodoTurn,
   } = useChatStore();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -80,6 +85,23 @@ export function App() {
     chunkCount?: number;
     error?: string;
   }>({ state: 'idle' });
+
+  // Todo display mode
+  const [todoDisplayMode, setTodoDisplayMode] = useState<'pinned' | 'inline' | 'floating'>('pinned');
+  const todoDisplayModeRef = React.useRef(todoDisplayMode);
+  todoDisplayModeRef.current = todoDisplayMode;
+
+  // Skills state
+  const [skillsList, setSkillsList] = useState<SkillInfo[]>([]);
+  const [skillTemplates, setSkillTemplates] = useState<SkillTemplate[]>([]);
+  const [skillVersions, setSkillVersions] = useState<SkillVersion[]>([]);
+  const [skillVersionsFor, setSkillVersionsFor] = useState<string | null>(null);
+  const [skillVersionContent, setSkillVersionContent] = useState<string | null>(null);
+  const [editingSkillContent, setEditingSkillContent] = useState<string | null>(null);
+  const [editingSkillName, setEditingSkillName] = useState<string | null>(null);
+  const [showConvertWizard, setShowConvertWizard] = useState(false);
+  const [convertingSkill, setConvertingSkill] = useState(false);
+  const [generatedSkill, setGeneratedSkill] = useState<{ name: string; description: string; tags: string[]; content: string } | null>(null);
 
   // Listen for messages from the extension host
   useEffect(() => {
@@ -310,6 +332,60 @@ export function App() {
           setEnhancingNodeId(null);
           setError(msg.error);
           break;
+
+        // Skills messages
+        case 'skillsLoaded':
+          setSkillsList(msg.skills);
+          break;
+
+        case 'skillSaved':
+        case 'skillDeleted':
+        case 'skillToggled':
+          // Skills list is auto-refreshed by extension host after these events
+          break;
+
+        case 'skillError':
+          setError(msg.error);
+          break;
+
+        case 'skillTemplatesLoaded':
+          setSkillTemplates(msg.templates);
+          break;
+
+        case 'skillVersionsLoaded':
+          setSkillVersionsFor(msg.skillName);
+          setSkillVersions(msg.versions);
+          break;
+
+        case 'skillVersionContent':
+          setSkillVersionContent(msg.content);
+          break;
+
+        case 'skillContentLoaded':
+          setEditingSkillName(msg.skillName);
+          setEditingSkillContent(msg.content);
+          break;
+
+        case 'skillVersionRestored':
+          postMessage({ type: 'loadSkills' });
+          break;
+
+        case 'conversationSkillGenerated':
+          setConvertingSkill(false);
+          setGeneratedSkill(msg.skill);
+          break;
+
+        // Todo messages
+        case 'todosUpdated':
+          setTodoList(msg.title, msg.todos);
+          if (todoDisplayModeRef.current === 'inline') {
+            addTodoSnapshot(msg.title, msg.todos);
+          }
+          break;
+
+        case 'todosTurnComplete':
+          completeTodoTurn(msg.summary);
+          break;
       }
     });
 
@@ -319,6 +395,7 @@ export function App() {
       postMessage({ type: 'searchWorkspaceFiles', query: '' });
       postMessage({ type: 'loadChatSessions' });
       postMessage({ type: 'loadPipelines' });
+      postMessage({ type: 'loadSkills' });
       setIsFirstLoad(false);
     }
 
@@ -341,6 +418,13 @@ export function App() {
   useEffect(() => {
     if (activeTab === 'benchmarks' && !benchmarkFetched && !benchmarkLoading) {
       handleRefreshBenchmarks();
+    }
+  }, [activeTab]);
+
+  // Refresh skills list when switching to skills tab
+  useEffect(() => {
+    if (activeTab === 'skills') {
+      postMessage({ type: 'loadSkills' });
     }
   }, [activeTab]);
 
@@ -588,7 +672,7 @@ export function App() {
     <div className="app">
       {/* Tab bar */}
       <div className="tab-bar">
-        {(['chat', 'pipeline', 'network', 'benchmarks', 'settings'] as Tab[]).map(tab => (
+        {(['chat', 'pipeline', 'skills', 'network', 'benchmarks', 'settings'] as Tab[]).map(tab => (
           <button
             key={tab}
             className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
@@ -596,6 +680,7 @@ export function App() {
           >
             {tab === 'chat' ? 'Chat' :
              tab === 'pipeline' ? 'Pipeline' :
+             tab === 'skills' ? 'Skills' :
              tab === 'network' ? 'Network' :
              tab === 'benchmarks' ? 'Benchmarks' : 'Settings'}
           </button>
@@ -636,6 +721,20 @@ export function App() {
               >
                 <RefreshIcon />
               </button>
+              {messages.length > 2 && !isLoading && (
+                <button
+                  className="icon-btn header-icon-btn"
+                  onClick={() => {
+                    setShowConvertWizard(true);
+                    setConvertingSkill(true);
+                    setGeneratedSkill(null);
+                    postMessage({ type: 'generateSkillFromConversation' });
+                  }}
+                  title="Convert conversation to skill"
+                >
+                  <span style={{ fontSize: '11px', fontWeight: 600 }}>Skill</span>
+                </button>
+              )}
               {messages.length > 0 && (
                 <button
                   className="icon-btn header-icon-btn"
@@ -666,6 +765,11 @@ export function App() {
             </div>
           )}
 
+          {/* Pinned todo panel */}
+          {todoList && todoDisplayMode === 'pinned' && (
+            <TodoListWidget title={todoList.title} items={todoList.items} mode="pinned" />
+          )}
+
           <div className="messages">
             {messages.length === 0 && !streamingContent && (
               <div className="welcome">
@@ -685,6 +789,19 @@ export function App() {
                 const groupId = msg.id.replace('parallel-marker-', '');
                 const group = completedParallelGroups.find(g => g.id === groupId);
                 return group ? <ParallelBranchGroup key={msg.id} group={group} /> : null;
+              }
+              // Todo summary marker
+              if (msg.toolName === '__todo_summary__') {
+                return (
+                  <div key={msg.id} className="todo-summary-msg">
+                    <span className="todo-summary-icon">&#10003;</span>
+                    <span>{msg.content}</span>
+                  </div>
+                );
+              }
+              // Inline todo snapshot
+              if (msg.toolName === '__todo_inline__' && msg.todoItems) {
+                return <TodoListWidget key={msg.id} title={msg.todoTitle} items={msg.todoItems} mode="inline" />;
               }
               return <MessageBubble key={msg.id} message={msg} />;
             })}
@@ -708,6 +825,27 @@ export function App() {
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Floating todo overlay */}
+          {todoList && todoDisplayMode === 'floating' && (
+            <TodoListWidget title={todoList.title} items={todoList.items} mode="floating" />
+          )}
+
+          {showConvertWizard && (
+            <ConvertToSkillWizard
+              generatedSkill={generatedSkill}
+              isGenerating={convertingSkill}
+              onSave={(skill) => {
+                postMessage({ type: 'saveSkill', skill: { ...skill, trigger: undefined, modelInvocable: true } });
+                setShowConvertWizard(false);
+                setGeneratedSkill(null);
+              }}
+              onCancel={() => {
+                setShowConvertWizard(false);
+                setConvertingSkill(false);
+                setGeneratedSkill(null);
+              }}
+            />
+          )}
           {askUserRequest && <AskUserDialog request={askUserRequest} onRespond={handleAskUserResponse} />}
           <ChatInput
             onSend={handleSend}
@@ -784,6 +922,29 @@ export function App() {
         </div>
       )}
 
+      {/* Skills Tab */}
+      {activeTab === 'skills' && (
+        <SkillsPanel
+          skills={skillsList}
+          templates={skillTemplates}
+          versions={skillVersions}
+          versionsSkillName={skillVersionsFor}
+          versionContent={skillVersionContent}
+          editingSkillContent={editingSkillContent}
+          editingSkillName={editingSkillName}
+          onToggle={(name, enabled) => postMessage({ type: 'toggleSkill', skillName: name, enabled })}
+          onDelete={(name) => postMessage({ type: 'deleteSkill', skillName: name })}
+          onSave={(skill) => postMessage({ type: 'saveSkill', skill })}
+          onRefresh={() => postMessage({ type: 'refreshSkills' })}
+          onLoadTemplates={() => postMessage({ type: 'loadSkillTemplates' })}
+          onLoadSkillContent={(name) => { setEditingSkillContent(null); setEditingSkillName(null); postMessage({ type: 'loadSkillContent', skillName: name }); }}
+          onLoadVersions={(name) => postMessage({ type: 'loadSkillVersions', skillName: name })}
+          onLoadVersionContent={(name, versionPath, version) => postMessage({ type: 'loadSkillVersionContent', skillName: name, versionPath, version })}
+          onRestoreVersion={(name, versionPath) => postMessage({ type: 'restoreSkillVersion', skillName: name, versionPath })}
+          onReorder={() => { /* order stored locally in component */ }}
+        />
+      )}
+
       {/* Network Tab */}
       {activeTab === 'network' && (
         <NetworkMonitorPanel
@@ -820,6 +981,8 @@ export function App() {
           hasBraveApiKey={hasBraveApiKey}
           webSearchEnabled={webSearchEnabled}
           onWebSearchToggle={handleWebSearchToggle}
+          todoDisplayMode={todoDisplayMode}
+          onTodoDisplayModeChange={setTodoDisplayMode}
         />
       )}
     </div>

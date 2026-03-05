@@ -20,7 +20,7 @@ import type {
   JoinConfig,
   VerificationConfig,
 } from './types';
-import type { ToolContext, ParallelBranchInfo } from '../types';
+import type { ToolContext, ParallelBranchInfo, AskUserOptionInput } from '../types';
 
 export interface PipelineCallbacks {
   onNodeStart: (node: PipelineNode) => void;
@@ -34,7 +34,7 @@ export interface PipelineCallbacks {
   executeAgent: (node: PipelineNode, config: AgentNodeConfig, input: string) => Promise<string>;
   executeTool: (config: ToolNodeConfig, context: ToolContext) => Promise<string>;
   evaluateCondition: (condition: string, context: PipelineExecutionContext) => Promise<boolean>;
-  askUser: (prompt: string, options?: string[], multiSelect?: boolean) => Promise<string>;
+  askUser: (prompt: string, options?: AskUserOptionInput[], multiSelect?: boolean) => Promise<string>;
   runVerification: (type: string, command?: string) => Promise<{ passed: boolean; output: string }>;
 }
 

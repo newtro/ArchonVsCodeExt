@@ -2,6 +2,15 @@
  * Core types for the Archon agent system.
  */
 
+// ── Ask-User option (supports label + optional description) ──
+
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+export type AskUserOptionInput = string | AskUserOption;
+
 // ── Messages ──
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
@@ -37,6 +46,32 @@ export interface SubAgentMessage {
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
   isError?: boolean;
+}
+
+// ── Todos ──
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'error' | 'skipped';
+
+export interface TodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
+export interface TodoList {
+  title?: string;
+  items: TodoItem[];
+  turnId: string;
+  startedAt: number;
+}
+
+export interface TodoSummary {
+  title?: string;
+  total: number;
+  completed: number;
+  error: number;
+  skipped: number;
+  abandoned: number;
 }
 
 // ── Models ──
@@ -80,7 +115,7 @@ export interface ToolParameterProperty {
 export interface ToolContext {
   workspaceRoot: string;
   sendMessage: (msg: string) => void;
-  askUser: (prompt: string, options?: string[], multiSelect?: boolean) => Promise<string>;
+  askUser: (prompt: string, options?: AskUserOptionInput[], multiSelect?: boolean) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, content: string) => Promise<void>;
   executeCommand: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -92,6 +127,9 @@ export interface ToolContext {
   getPipeline?: (id: string) => Promise<import('./pipeline/types').Pipeline | undefined>;
   getAvailablePipelines?: () => Promise<PipelineInfo[]>;
   deletePipeline?: (id: string) => Promise<boolean>;
+
+  // Todo management (optional — available when running inside the extension)
+  updateTodos?: (title: string | undefined, todos: TodoItem[]) => void;
 }
 
 export interface DiagnosticInfo {
@@ -209,7 +247,7 @@ export type ExtensionMessage =
   | { type: 'modelsLoaded'; models: ModelInfo[] }
   | { type: 'modelChanged'; modelId: string }
   | { type: 'error'; error: string }
-  | { type: 'askUser'; id: string; prompt: string; options?: string[]; multiSelect?: boolean }
+  | { type: 'askUser'; id: string; prompt: string; options?: AskUserOptionInput[]; multiSelect?: boolean }
   | { type: 'filePicked'; path: string; content: string }
   | { type: 'workspaceFilesResult'; files: string[] }
   | { type: 'settingsLoaded'; securityLevel: string; archiveEnabled: boolean; modelPool: string[]; hasBraveApiKey: boolean; webSearchEnabled: boolean }
@@ -227,7 +265,22 @@ export type ExtensionMessage =
   | { type: 'pipelineSaved'; pipelineId: string }
   | { type: 'pipelineDeleted'; pipelineId: string }
   | { type: 'promptEnhanced'; nodeId: string; enhanced: string }
-  | { type: 'promptEnhanceError'; nodeId: string; error: string };
+  | { type: 'promptEnhanceError'; nodeId: string; error: string }
+  // Skills
+  | { type: 'skillsLoaded'; skills: import('./skills/types').SkillInfo[] }
+  | { type: 'skillSaved'; skillName: string }
+  | { type: 'skillDeleted'; skillName: string }
+  | { type: 'skillToggled'; skillName: string; enabled: boolean }
+  | { type: 'skillError'; error: string }
+  | { type: 'skillTemplatesLoaded'; templates: import('./skills/skill-templates').SkillTemplate[] }
+  | { type: 'skillVersionsLoaded'; skillName: string; versions: import('./skills/types').SkillVersion[] }
+  | { type: 'skillVersionContent'; skillName: string; version: number; content: string }
+  | { type: 'skillVersionRestored'; skillName: string }
+  | { type: 'skillContentLoaded'; skillName: string; content: string }
+  | { type: 'conversationSkillGenerated'; skill: { name: string; description: string; tags: string[]; content: string } }
+  // Todos
+  | { type: 'todosUpdated'; title?: string; todos: TodoItem[] }
+  | { type: 'todosTurnComplete'; summary: TodoSummary };
 
 export interface ParallelBranchInfo {
   branchId: string;
@@ -282,7 +335,19 @@ export type WebviewMessage =
   | { type: 'promptClonePipeline'; sourceId: string }
   | { type: 'promptNewPipeline' }
   | { type: 'updateNodeConfig'; nodeId: string; config: Record<string, unknown> }
-  | { type: 'enhancePrompt'; nodeId: string; prompt: string };
+  | { type: 'enhancePrompt'; nodeId: string; prompt: string }
+  // Skills management
+  | { type: 'loadSkills' }
+  | { type: 'saveSkill'; skill: { name: string; description: string; scope: 'global' | 'project'; enabled: boolean; tags: string[]; content: string; trigger?: string; modelInvocable?: boolean } }
+  | { type: 'deleteSkill'; skillName: string }
+  | { type: 'toggleSkill'; skillName: string; enabled: boolean }
+  | { type: 'refreshSkills' }
+  | { type: 'loadSkillTemplates' }
+  | { type: 'loadSkillVersions'; skillName: string }
+  | { type: 'loadSkillVersionContent'; skillName: string; versionPath: string; version: number }
+  | { type: 'restoreSkillVersion'; skillName: string; versionPath: string }
+  | { type: 'generateSkillFromConversation' }
+  | { type: 'loadSkillContent'; skillName: string };
 
 export interface PipelineGraphData {
   id: string;

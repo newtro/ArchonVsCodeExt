@@ -91,6 +91,11 @@ function toolSummary(name: string, args?: Record<string, unknown>): string {
     }
     case 'diff_view':
       return `Diff ${args.path ?? ''}`;
+    case 'todo_write': {
+      const todoTitle = args.title as string ?? '';
+      const todos = args.todos as unknown[] ?? [];
+      return todoTitle ? `Todos: ${todoTitle} (${todos.length} items)` : `Todos (${todos.length} items)`;
+    }
     default:
       return name;
   }

@@ -79,7 +79,7 @@ export interface PipelineExecutorCallbacks {
   onParallelStart: (branches: ParallelBranchInfo[]) => void;
   onBranchComplete: (branchId: string, label: string) => void;
   onParallelComplete: () => void;
-  askUser: (prompt: string, options?: string[], multiSelect?: boolean) => Promise<string>;
+  askUser: (prompt: string, options?: import('../types').AskUserOptionInput[], multiSelect?: boolean) => Promise<string>;
   runVerification: (type: string, command?: string) => Promise<{ passed: boolean; output: string }>;
 }
 
