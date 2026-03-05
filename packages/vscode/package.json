@@ -1,0 +1,138 @@
+{
+  "name": "@archon/vscode",
+  "displayName": "Archon",
+  "description": "Model-agnostic AI coding extension with visual workflow editor",
+  "version": "0.1.0",
+  "publisher": "archon",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension/index.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "archon",
+          "title": "Archon",
+          "icon": "resources/archon-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "archon": [
+        {
+          "type": "webview",
+          "id": "archon.chatView",
+          "name": "Archon"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "archon.newChat",
+        "title": "Archon: New Chat"
+      },
+      {
+        "command": "archon.setApiKey",
+        "title": "Archon: Set OpenRouter API Key"
+      },
+      {
+        "command": "archon.selectModel",
+        "title": "Archon: Select Model"
+      },
+      {
+        "command": "archon.focusChat",
+        "title": "Archon: Focus Chat"
+      },
+      {
+        "command": "archon.toggleSecurityLevel",
+        "title": "Archon: Toggle Security Level"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "archon.focusChat",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      },
+      {
+        "command": "archon.newChat",
+        "key": "ctrl+shift+n",
+        "mac": "cmd+shift+n",
+        "when": "view.archon.chatView.visible"
+      }
+    ],
+    "configuration": {
+      "title": "Archon",
+      "properties": {
+        "archon.securityLevel": {
+          "type": "string",
+          "default": "standard",
+          "enum": ["yolo", "permissive", "standard", "strict"],
+          "enumDescriptions": [
+            "No confirmation for anything — full auto-approve",
+            "Auto-approve most commands, confirm destructive ones",
+            "Auto-approve reads, confirm writes and commands",
+            "Confirm everything"
+          ],
+          "description": "Security level for command execution and approvals."
+        },
+        "archon.enableInteractionArchive": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the interaction archive for semantic search of past conversations."
+        },
+        "archon.diffViewMode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "always",
+            "auto",
+            "never"
+          ],
+          "description": "When to show diff views before applying edits."
+        },
+        "archon.gitCheckpoints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create git checkpoint commits before edit batches."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "npm run build:extension && npm run build:webview",
+    "build:extension": "tsc -p tsconfig.extension.json",
+    "build:webview": "vite build",
+    "dev": "concurrently \"tsc -p tsconfig.extension.json --watch\" \"vite build --watch\"",
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('out',{recursive:true,force:true});fs.rmSync('dist',{recursive:true,force:true});fs.rmSync('tsconfig.extension.tsbuildinfo',{force:true})\"",
+    "lint": "echo 'lint ok'",
+    "test": "echo 'no tests yet'",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@archon/core": "workspace:*",
+    "@archon/memory": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/marked": "^6.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/vscode": "^1.96.0",
+    "@vitejs/plugin-react": "^4.5.0",
+    "concurrently": "^9.1.0",
+    "marked": "^17.0.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.3.0",
+    "zustand": "^5.0.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "archon",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.8.0",
+    "typescript": "^5.8.0"
+  },
+  "packageManager": "pnpm@10.6.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["@openrouter/sdk", "esbuild"]
+  }
+}

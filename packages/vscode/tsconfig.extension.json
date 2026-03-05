@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./out",
+    "rootDir": "./src",
+    "types": ["node"]
+  },
+  "include": ["src/extension/**/*", "src/lsp/**/*"],
+  "exclude": ["src/webview/**/*"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../memory" }
+  ]
+}
