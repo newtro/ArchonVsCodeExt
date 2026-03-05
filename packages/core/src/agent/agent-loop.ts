@@ -6,6 +6,7 @@
 import { OpenRouterClient } from '../models/openrouter-client';
 import type {
   AgentConfig,
+  Attachment,
   ChatMessage,
   StreamToken,
   ToolCall,
@@ -66,7 +67,7 @@ export class AgentLoop {
    * Send a user message and run the agent loop until the LLM
    * either responds with text only (no tool calls) or max iterations reached.
    */
-  async run(userMessage: string): Promise<void> {
+  async run(userMessage: string, attachments?: Attachment[]): Promise<void> {
     this.abortController = new AbortController();
 
     this.messages.push({
@@ -74,6 +75,7 @@ export class AgentLoop {
       role: 'user',
       content: userMessage,
       timestamp: Date.now(),
+      attachments: attachments?.length ? attachments : undefined,
     });
 
     const maxIterations = this.config.maxIterations ?? Infinity;

@@ -62,6 +62,18 @@ export interface PipelineExecutorConfig {
 
   /** Model pool mapping: role → model ID (e.g., { architect: 'anthropic/...', coder: '...' }) */
   modelPool?: Record<string, string>;
+
+  /** Optional Claude CLI provider for per-node provider override in pipelines */
+  claudeCliProvider?: import('../providers/claude-cli-provider').ClaudeCliProvider;
+
+  /** Security level for Claude CLI permission mapping */
+  securityLevel?: 'yolo' | 'permissive' | 'standard' | 'strict';
+
+  /** Workspace root for Claude CLI --add-dir */
+  workspaceRoot?: string;
+
+  /** Resolved attachments from the user message (images, files, PDFs). */
+  attachments?: import('../types').Attachment[];
 }
 
 // ── Callbacks for UI updates ──
@@ -195,6 +207,11 @@ export class PipelineExecutor {
     config: AgentNodeConfig,
     input: string,
   ): Promise<string> {
+    // Route to Claude CLI if this node specifies the claude-cli provider
+    if (config.provider === 'claude-cli' && this.config.claudeCliProvider) {
+      return this.executeAgentViaCli(node, config, input);
+    }
+
     const branchId = node.branchId;
     const model = this.resolveModel(config.model);
     const basePrompt = config.systemPrompt ?? this.config.defaultSystemPrompt;
@@ -239,6 +256,9 @@ export class PipelineExecutor {
     // Load conversation history for multi-turn continuity:
     // - First agent node always gets it (so multi-message chats work)
     // - Subsequent agent nodes get it only if inheritContext is true
+    // Pass attachments only to the first agent node (they belong to the user's initial message)
+    const attachmentsForNode = this.isFirstAgentNode ? this.config.attachments : undefined;
+
     if (this.config.conversationHistory) {
       if (this.isFirstAgentNode || config.inheritContext) {
         agentLoop.loadHistory(this.config.conversationHistory);
@@ -254,7 +274,7 @@ export class PipelineExecutor {
     }
 
     try {
-      await agentLoop.run(input);
+      await agentLoop.run(input, attachmentsForNode);
     } finally {
       if (branchId) {
         this.activeAgentLoops.delete(branchId);
@@ -263,6 +283,51 @@ export class PipelineExecutor {
         this.currentAgentLoop = null;
       }
     }
+
+    return finalContent;
+  }
+
+  /**
+   * Execute an agent node via Claude CLI provider.
+   * Used when a pipeline node has provider='claude-cli'.
+   */
+  private async executeAgentViaCli(
+    node: PipelineNode,
+    config: AgentNodeConfig,
+    input: string,
+  ): Promise<string> {
+    const branchId = node.branchId;
+    const provider = this.config.claudeCliProvider!;
+    const model = this.resolveModel(config.model);
+    const basePrompt = config.systemPrompt ?? this.config.defaultSystemPrompt;
+    const systemPrompt = this.config.projectContext
+      ? `${basePrompt}\n\n## Project Instructions\n\n${this.config.projectContext}`
+      : basePrompt;
+
+    const executor = provider.createExecutor({
+      model,
+      systemPrompt,
+      tools: this.config.tools,
+      toolContext: this.config.toolContext,
+      securityLevel: this.config.securityLevel,
+      workspaceRoot: this.config.workspaceRoot,
+    });
+
+    let finalContent = '';
+
+    this.isFirstAgentNode = false;
+
+    await executor.run(input, {
+      onToken: (token) => this.uiCallbacks.onToken(token, branchId),
+      onToolCall: (tc) => this.uiCallbacks.onToolCall(tc, branchId),
+      onToolResult: (result) => this.uiCallbacks.onToolResult(result, branchId),
+      onMessageComplete: (msg) => {
+        this.uiCallbacks.onMessageComplete(msg, branchId);
+        if (msg.role === 'assistant' && msg.content) {
+          finalContent = msg.content;
+        }
+      },
+    });
 
     return finalContent;
   }

@@ -1,23 +1,27 @@
 /**
- * FilePickerPopup — autocomplete popup for @ command workspace file selection.
+ * SkillPickerPopup — autocomplete popup for / command skill selection.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { FileIcon } from './Icons';
+
+export interface SkillPickerItem {
+  name: string;
+  description: string;
+}
 
 interface Props {
   query: string;
-  files: string[];
-  onSelect: (path: string) => void;
+  skills: SkillPickerItem[];
+  onSelect: (skillName: string) => void;
   onClose: () => void;
 }
 
-export function FilePickerPopup({ query, files, onSelect, onClose }: Props) {
+export function SkillPickerPopup({ query, skills, onSelect, onClose }: Props) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const filtered = files
-    .filter(f => f.toLowerCase().includes(query.toLowerCase()))
+  const filtered = skills
+    .filter(s => s.name.toLowerCase().includes(query.toLowerCase()))
     .slice(0, 10);
 
   useEffect(() => {
@@ -38,7 +42,7 @@ export function FilePickerPopup({ query, files, onSelect, onClose }: Props) {
         case 'Tab':
         case 'Enter':
           e.preventDefault();
-          if (filtered[selectedIndex]) onSelect(filtered[selectedIndex]);
+          if (filtered[selectedIndex]) onSelect(filtered[selectedIndex].name);
           break;
         case 'Escape':
           e.preventDefault();
@@ -62,16 +66,16 @@ export function FilePickerPopup({ query, files, onSelect, onClose }: Props) {
   if (filtered.length === 0) return null;
 
   return (
-    <div className="file-picker-popup" ref={listRef}>
-      {filtered.map((file, i) => (
+    <div className="skill-picker-popup" ref={listRef}>
+      {filtered.map((skill, i) => (
         <div
-          key={file}
-          className={`file-picker-item ${i === selectedIndex ? 'selected' : ''}`}
-          onMouseDown={(e) => { e.preventDefault(); onSelect(file); }}
+          key={skill.name}
+          className={`skill-picker-item ${i === selectedIndex ? 'selected' : ''}`}
+          onMouseDown={(e) => { e.preventDefault(); onSelect(skill.name); }}
           onMouseEnter={() => setSelectedIndex(i)}
         >
-          <FileIcon />
-          <span>{file}</span>
+          <span className="skill-picker-name">/{skill.name}</span>
+          <span className="skill-picker-desc">{skill.description}</span>
         </div>
       ))}
     </div>

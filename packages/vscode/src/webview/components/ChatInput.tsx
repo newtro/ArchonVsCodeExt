@@ -4,10 +4,12 @@
  */
 
 import React, { useState, useRef, useCallback } from 'react';
-import type { ModelInfo, Attachment, PipelineInfo } from '@archon/core';
+import type { ModelInfo, Attachment, PipelineInfo, ProviderInfo } from '@archon/core';
 import { SendIcon, StopIcon, PaperclipIcon } from './Icons';
 import { AttachmentChip } from './AttachmentChip';
 import { FilePickerPopup } from './FilePickerPopup';
+import type { SkillPickerItem } from './SkillPickerPopup';
+import { SkillPickerPopup } from './SkillPickerPopup';
 
 interface Props {
   onSend: (content: string, attachments: Attachment[]) => void;
@@ -25,6 +27,10 @@ interface Props {
   pipelines: PipelineInfo[];
   selectedPipelineId: string;
   onPipelineChange: (pipelineId: string) => void;
+  providers: ProviderInfo[];
+  activeProviderId: string;
+  onProviderChange: (providerId: string) => void;
+  skills: SkillPickerItem[];
 }
 
 export function ChatInput({
@@ -33,10 +39,14 @@ export function ChatInput({
   onPickFile, workspaceFiles,
   attachments, onAddAttachment, onRemoveAttachment,
   pipelines, selectedPipelineId, onPipelineChange,
+  providers, activeProviderId, onProviderChange,
+  skills,
 }: Props) {
   const [input, setInput] = useState('');
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [fileQuery, setFileQuery] = useState('');
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const [skillQuery, setSkillQuery] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = useCallback(() => {
@@ -50,7 +60,7 @@ export function ChatInput({
   }, [input, disabled, onSend, attachments]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (showFilePicker) return; // Let FilePickerPopup handle keys
+    if (showFilePicker || showSkillPicker) return; // Let popup handle keys
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -75,6 +85,15 @@ export function ChatInput({
       setFileQuery(atMatch[1]);
     } else {
       setShowFilePicker(false);
+    }
+
+    // Detect / trigger for skill picker (only at start of input)
+    const slashMatch = textBefore.match(/^\/([^\s]*)$/);
+    if (slashMatch && skills.length > 0) {
+      setShowSkillPicker(true);
+      setSkillQuery(slashMatch[1]);
+    } else {
+      setShowSkillPicker(false);
     }
   };
 
@@ -101,6 +120,21 @@ export function ChatInput({
         return;
       }
     }
+  };
+
+  const handleSkillSelect = (skillName: string) => {
+    setShowSkillPicker(false);
+    // Replace the /query text with the full /skillName
+    setInput(`/${skillName} `);
+    setTimeout(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        const pos = skillName.length + 2; // after "/<name> "
+        ta.selectionStart = pos;
+        ta.selectionEnd = pos;
+      }
+    }, 0);
   };
 
   const handleFileSelect = (filePath: string) => {
@@ -135,6 +169,16 @@ export function ChatInput({
         />
       )}
 
+      {/* Skill picker popup */}
+      {showSkillPicker && (
+        <SkillPickerPopup
+          query={skillQuery}
+          skills={skills}
+          onSelect={handleSkillSelect}
+          onClose={() => setShowSkillPicker(false)}
+        />
+      )}
+
       <div className="chat-input-card">
         {/* Attachment chips */}
         {attachments.length > 0 && (
@@ -158,7 +202,7 @@ export function ChatInput({
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={disabled ? 'Set API key to start...' : 'Type a message... (@ to attach file)'}
+          placeholder={disabled ? 'Set API key to start...' : 'Type a message... (@ to attach, / for skills)'}
           disabled={disabled}
           rows={1}
         />
@@ -166,6 +210,20 @@ export function ChatInput({
         {/* Bottom bar: selectors + actions */}
         <div className="input-bottom-bar">
           <div className="input-selectors">
+            {providers.length > 1 && (
+              <select
+                className="input-provider-selector"
+                value={activeProviderId}
+                onChange={(e) => onProviderChange(e.target.value)}
+                title="Select provider"
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id} disabled={!p.available}>
+                    {p.name}{!p.available ? ' (unavailable)' : ''}
+                  </option>
+                ))}
+              </select>
+            )}
             <select
               className="input-model-selector"
               value={selectedModelId}
@@ -178,18 +236,20 @@ export function ChatInput({
               ))}
             </select>
 
-            <select
-              className="input-pipeline-selector"
-              value={selectedPipelineId}
-              onChange={(e) => onPipelineChange(e.target.value)}
-              title="Select pipeline"
-              disabled={isLoading}
-            >
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-              {pipelines.length === 0 && <option value="default">Default</option>}
-            </select>
+            {activeProviderId !== 'claude-cli' && (
+              <select
+                className="input-pipeline-selector"
+                value={selectedPipelineId}
+                onChange={(e) => onPipelineChange(e.target.value)}
+                title="Select pipeline"
+                disabled={isLoading}
+              >
+                {pipelines.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+                {pipelines.length === 0 && <option value="default">Default</option>}
+              </select>
+            )}
           </div>
 
           <div className="input-actions">

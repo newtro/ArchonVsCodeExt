@@ -611,12 +611,13 @@ body {
   min-width: 0;
 }
 
+.input-provider-selector,
 .input-model-selector,
 .input-pipeline-selector {
   min-width: 0;
-  background: rgba(127, 127, 127, 0.1);
+  background: var(--vscode-dropdown-background, #313131);
   color: var(--vscode-dropdown-foreground);
-  border: 1px solid transparent;
+  border: 1px solid var(--vscode-dropdown-border, #454545);
   padding: 3px 8px;
   border-radius: 6px;
   font-size: 11px;
@@ -625,9 +626,22 @@ body {
   transition: background 0.15s ease;
 }
 
+.input-provider-selector option,
+.input-model-selector option,
+.input-pipeline-selector option {
+  background: var(--vscode-dropdown-background, #313131);
+  color: var(--vscode-dropdown-foreground);
+}
+
+.input-provider-selector:hover,
 .input-model-selector:hover,
 .input-pipeline-selector:hover {
-  background: rgba(127, 127, 127, 0.2);
+  background: var(--vscode-dropdown-background, #3c3c3c);
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.input-provider-selector {
+  max-width: 140px;
 }
 
 .input-pipeline-selector {
@@ -740,6 +754,50 @@ body {
 
 .file-picker-item:hover,
 .file-picker-item.selected {
+  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-menu-selectionBackground, #094771));
+  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-menu-selectionForeground));
+}
+
+/* ── Skill Picker Popup ── */
+.skill-picker-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  right: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--vscode-editorSuggestWidget-background, var(--vscode-menu-background, #252526));
+  border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-menu-border, #454545));
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+}
+
+.skill-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.skill-picker-name {
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.skill-picker-desc {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+}
+
+.skill-picker-item:hover,
+.skill-picker-item.selected {
   background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-menu-selectionBackground, #094771));
   color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-menu-selectionForeground));
 }
@@ -1820,6 +1878,22 @@ body {
 .settings-btn-sm:hover {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
+}
+
+/* ── Claude CLI Status ── */
+.cli-status {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.cli-status-ok {
+  background: rgba(40, 167, 69, 0.15);
+  color: #4ec96c;
+}
+.cli-status-warn {
+  background: rgba(255, 193, 7, 0.15);
+  color: #e5a100;
 }
 
 /* ── Model Pool ── */

@@ -27,9 +27,14 @@ interface OpenRouterChatRequest {
   max_tokens?: number;
 }
 
+/** A content part in a multimodal message. */
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 interface OpenRouterMessage {
   role: string;
-  content: string | null;
+  content: string | ContentPart[] | null;
   tool_calls?: OpenRouterToolCall[];
   tool_call_id?: string;
 }
@@ -277,6 +282,22 @@ export class OpenRouterClient {
         role: m.role,
         content: m.content || null,
       };
+
+      // Build multimodal content if the message has image/PDF attachments
+      if (m.attachments && m.attachments.length > 0 && m.role === 'user') {
+        const parts: ContentPart[] = [];
+        if (m.content) {
+          parts.push({ type: 'text', text: m.content });
+        }
+        for (const att of m.attachments) {
+          if ((att.type === 'image' || att.type === 'pdf') && att.dataUri) {
+            parts.push({ type: 'image_url', image_url: { url: att.dataUri } });
+          }
+        }
+        if (parts.length > 0) {
+          msg.content = parts;
+        }
+      }
 
       if (m.toolCalls && m.toolCalls.length > 0) {
         msg.tool_calls = m.toolCalls.map(tc => ({

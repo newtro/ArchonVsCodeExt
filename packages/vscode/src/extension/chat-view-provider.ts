@@ -19,8 +19,12 @@ import {
   createSkillTools,
   SkillVersionManager,
   getBuiltInSkillTemplates,
+  OpenRouterProvider,
+  ClaudeCliProvider,
+  ProviderManager,
+  detectClaudeCli,
 } from '@archon/core';
-import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput } from '@archon/core';
+import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput, ProviderId, ProviderInfo } from '@archon/core';
 import { CodebaseIndexer, ApiEmbeddingProvider } from '@archon/memory';
 import type {
   WebviewMessage,
@@ -65,8 +69,14 @@ Rules:
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
-  private client: OpenRouterClient;
+  private providerManager: ProviderManager;
+  private openRouterProvider: OpenRouterProvider;
+  private claudeCliProvider: ClaudeCliProvider;
   private agentLoop?: AgentLoop;
+  private claudeCliSessionId: string | null = null;
+  private claudeCliExecutor?: import('@archon/core').Executor;
+  private cliPendingUserAnswer: string | null = null;
+  private cliAbortedForAskUser = false;
   private pipelineExecutor?: PipelineExecutor;
   private isRunning = false;
   private pendingSessionHistory?: ChatSessionMessage[];
@@ -91,9 +101,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
-    this.client = new OpenRouterClient({ apiKey: '' });
+    this.openRouterProvider = new OpenRouterProvider({ apiKey: '' });
+    this.claudeCliProvider = new ClaudeCliProvider();
+    this.providerManager = new ProviderManager();
+    this.providerManager.register(this.openRouterProvider);
+    this.providerManager.register(this.claudeCliProvider);
+
+    // Restore saved provider preference
+    const savedProvider = context.globalState.get<string>('archon.activeProvider', 'openrouter');
+    if (savedProvider === 'claude-cli' || savedProvider === 'openrouter') {
+      try { this.providerManager.setActive(savedProvider as ProviderId); } catch { /* keep default */ }
+    }
     this.selectedModelId = context.globalState.get<string>('archon.selectedModelId', '');
-    const savedLevel = context.globalState.get<string>('archon.securityLevel', 'standard') as 'permissive' | 'standard' | 'strict';
+    const savedLevel = context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict';
     this.securityManager = new SecurityManager({ level: savedLevel });
     this.networkMonitor = new NetworkMonitor();
     this.diffViewManager = new DiffViewManager();
@@ -247,14 +267,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private buildSystemPrompt(workspaceRoot: string): string {
+  private buildSystemPrompt(workspaceRoot: string, options?: { skipSkills?: boolean }): string {
     const claudeMd = this.loadProjectContext(workspaceRoot);
     let prompt = SYSTEM_PROMPT;
     if (claudeMd) {
       prompt += `\n\n## Project Instructions (from CLAUDE.md)\n\n${claudeMd}`;
     }
-    // Inject available skills context
-    if (this.skillRegistry?.isInitialized()) {
+    // Inject available skills context (skip for Claude CLI — it has its own skill system
+    // and injecting Archon skill names causes conflicts with .claude/skills/)
+    if (!options?.skipSkills && this.skillRegistry?.isInitialized()) {
       const skillsContext = this.skillRegistry.generateSystemPromptContext();
       if (skillsContext) {
         prompt += `\n\n${skillsContext}`;
@@ -276,8 +297,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return '';
   }
 
+  /**
+   * For Claude CLI: resolve an attachment to a file path the CLI's Read tool can access.
+   * Pasted images (data URIs) are saved to temp files; @-attached files use their original path.
+   */
+  private resolveAttachmentPathForCli(att: import('@archon/core').Attachment): string | null {
+    // If it came from an @ file pick, the name is a workspace-relative path
+    if (!att.dataUri?.startsWith('data:')) {
+      // No data URI — this shouldn't happen for images, but handle gracefully
+      return null;
+    }
+
+    // Check if the attachment was from a file pick (has a file-like name, not "pasted-image.png")
+    const isFilePick = att.name && !att.name.startsWith('pasted-') && !att.name.startsWith('clipboard-');
+    if (isFilePick) {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+      const absPath = path.isAbsolute(att.name) ? att.name : path.join(workspaceRoot, att.name);
+      if (fs.existsSync(absPath)) {
+        return absPath;
+      }
+    }
+
+    // Pasted image — save data URI to temp file
+    try {
+      const match = att.dataUri.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) return null;
+      const ext = match[1].split('/')[1] || 'png';
+      const tmpDir = require('os').tmpdir();
+      const tmpFile = path.join(tmpDir, `archon-attach-${att.id}.${ext}`);
+      fs.writeFileSync(tmpFile, Buffer.from(match[2], 'base64'));
+      return tmpFile;
+    } catch {
+      return null;
+    }
+  }
+
   setApiKey(key: string): void {
-    this.client.setApiKey(key);
+    this.openRouterProvider.setApiKey(key);
     this.loadModels();
   }
 
@@ -318,7 +374,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async loadModels(): Promise<void> {
     try {
-      this.models = await this.client.listModels();
+      const activeProvider = this.providerManager.getActive();
+      if (!activeProvider) {
+        this.postMessage({ type: 'error', error: 'No active provider' });
+        return;
+      }
+      this.models = await activeProvider.getModels();
       this.models.sort((a, b) => a.name.localeCompare(b.name));
       this.postMessage({ type: 'modelsLoaded', models: this.models });
 
@@ -345,7 +406,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.handleUserMessage(msg.content, msg.attachments);
         break;
       case 'cancelRequest':
-        if (this.pipelineExecutor) {
+        if (this.claudeCliExecutor) {
+          this.claudeCliExecutor.abort();
+        } else if (this.cliAbortedForAskUser || this.pendingAskUser.size > 0) {
+          // Waiting for ask-user answer between CLI runs — cancel the wait
+          for (const [id, pending] of this.pendingAskUser) {
+            pending.reject(new Error('Cancelled'));
+          }
+          this.pendingAskUser.clear();
+          this.cliAbortedForAskUser = false;
+          this.cliPendingUserAnswer = null;
+          this.isRunning = false;
+          this.postMessage({ type: 'agentLoopDone' });
+        } else if (this.pipelineExecutor) {
           this.pipelineExecutor.abort();
         } else {
           this.agentLoop?.cancel();
@@ -367,9 +440,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.agentLoop?.cancel();
         this.agentLoop = undefined;
         this.pipelineExecutor = undefined;
+        this.claudeCliExecutor?.abort();
+        this.claudeCliExecutor = undefined;
+        this.claudeCliSessionId = null;
+        this.cliPendingUserAnswer = null;
+        this.cliAbortedForAskUser = false;
         break;
       case 'setApiKey':
-        this.client.setApiKey(msg.key);
+        this.openRouterProvider.setApiKey(msg.key);
         await this.context.secrets.store('archon.openRouterApiKey', msg.key);
         await this.loadModels();
         break;
@@ -403,7 +481,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const pool = this.context.globalState.get<string[]>('archon.modelPool', []);
         const braveKey = await this.context.secrets.get('archon.braveApiKey');
         const webSearchEnabled = this.context.globalState.get<boolean>('archon.webSearchEnabled', true);
-        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled });
+        const activeProvider = this.providerManager.getActiveId();
+        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled, activeProvider });
         break;
       }
       case 'setBraveApiKey':
@@ -519,6 +598,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'generateSkillFromConversation':
         this.handleGenerateSkillFromConversation();
         break;
+      // Provider management
+      case 'selectProvider':
+        await this.handleSelectProvider(msg.providerId as ProviderId);
+        break;
+      case 'loadProviders':
+        await this.sendProvidersList();
+        break;
+      case 'setClaudeCliPath':
+        this.claudeCliProvider.setCliPath(msg.path);
+        this.context.globalState.update('archon.claudeCliPath', msg.path);
+        await this.sendProvidersList();
+        break;
+      case 'setMcpConfigPath':
+        this.context.globalState.update('archon.mcpConfigPath', msg.path || undefined);
+        break;
     }
   }
 
@@ -542,7 +636,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async handleEnhancePrompt(nodeId: string, prompt: string): Promise<void> {
     try {
       const model = this.selectedModelId || 'openai/gpt-4o-mini';
-      const enhanced = await this.client.simpleChat(model, [
+      const enhanced = await this.openRouterProvider.simpleChat(model, [
         {
           role: 'system',
           content: [
@@ -725,6 +819,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // ── Provider Management ──
+
+  private async handleSelectProvider(providerId: ProviderId): Promise<void> {
+    try {
+      this.providerManager.setActive(providerId);
+      this.context.globalState.update('archon.activeProvider', providerId);
+      this.postMessage({ type: 'providerChanged', providerId });
+      // Reload models for the new provider
+      await this.loadModels();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'error', error: `Failed to switch provider: ${msg}` });
+    }
+  }
+
+  private async sendProvidersList(): Promise<void> {
+    const providers: ProviderInfo[] = [];
+    for (const provider of this.providerManager.getAll()) {
+      let available = false;
+      try {
+        available = await provider.isAvailable();
+      } catch { /* not available */ }
+      providers.push({ id: provider.id, name: provider.name, available });
+    }
+    this.postMessage({ type: 'providersLoaded', providers });
+    this.postMessage({ type: 'providerChanged', providerId: this.providerManager.getActiveId() });
+
+    // Also send detailed Claude CLI status
+    const cliStatus = await detectClaudeCli(this.claudeCliProvider.getCliPath());
+    this.postMessage({
+      type: 'providerStatus',
+      providerId: 'claude-cli',
+      available: cliStatus.installed && cliStatus.authenticated,
+      error: cliStatus.error,
+    });
+    this.postMessage({
+      type: 'claudeCliStatusResult',
+      installed: cliStatus.installed,
+      authenticated: cliStatus.authenticated,
+      version: cliStatus.version,
+      error: cliStatus.error,
+    });
+  }
+
   private async handleUserMessage(content: string, attachments?: import('@archon/core').Attachment[]): Promise<void> {
     if (!this.selectedModelId) {
       this.postMessage({ type: 'error', error: 'No model selected. Use "Archon: Select Model" command.' });
@@ -735,7 +873,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // running agent loop so the agent sees the correction/follow-up in context.
     // Only fall back to abort-restart if injection isn't possible.
     if (this.isRunning) {
-      if (this.pipelineExecutor) {
+      if (this.claudeCliExecutor) {
+        // Claude CLI doesn't support mid-run injection — abort and restart
+        // with --resume so the CLI has conversational context.
+        this.claudeCliExecutor.abort();
+        this.claudeCliExecutor = undefined;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } else if (this.pipelineExecutor) {
         const injected = this.pipelineExecutor.injectUserMessage(content);
         if (injected) {
           // Message was queued — the running agent will see it after its
@@ -751,10 +895,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           });
           return;
         }
-      }
-      // Injection not possible (no agent node running) — abort and restart.
-      // Capture conversation history before aborting so the next run has context.
-      if (this.pipelineExecutor) {
+        // Injection not possible (no agent node running) — abort and restart.
+        // Capture conversation history before aborting so the next run has context.
         const loop = this.pipelineExecutor.getLastAgentLoop();
         if (loop) {
           this.agentLoop = loop;
@@ -766,20 +908,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    // Build content with attachments
-    let fullContent = content;
+    // Resolve attachment content (read files from disk, detect PDFs)
+    const resolvedAttachments: import('@archon/core').Attachment[] = [];
     if (attachments && attachments.length > 0) {
-      const parts: string[] = [content];
       for (const att of attachments) {
-        if (att.type === 'file' && att.content) {
-          parts.push(`\n\n--- Attached file: ${att.name} ---\n${att.content}`);
-        } else if (att.type === 'image') {
-          parts.push(`\n\n[Attached image: ${att.name}]`);
+        if (att.type === 'file' && !att.content) {
+          // Resolve file content from workspace
+          const filePath = path.isAbsolute(att.name)
+            ? att.name
+            : path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', att.name);
+          try {
+            const ext = path.extname(filePath).toLowerCase();
+            if (ext === '.pdf') {
+              // Read PDF as base64 data URI
+              const raw = fs.readFileSync(filePath);
+              const b64 = raw.toString('base64');
+              resolvedAttachments.push({
+                ...att,
+                type: 'pdf',
+                content: `[PDF file: ${att.name}]`,
+                dataUri: `data:application/pdf;base64,${b64}`,
+                mimeType: 'application/pdf',
+              });
+            } else if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) {
+              // Read image as base64 data URI
+              const raw = fs.readFileSync(filePath);
+              const b64 = raw.toString('base64');
+              const mime = ext === '.png' ? 'image/png'
+                : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+                : ext === '.gif' ? 'image/gif'
+                : ext === '.webp' ? 'image/webp'
+                : ext === '.svg' ? 'image/svg+xml' : 'application/octet-stream';
+              resolvedAttachments.push({
+                ...att,
+                type: 'image',
+                content: `[Image: ${att.name}]`,
+                dataUri: `data:${mime};base64,${b64}`,
+                mimeType: mime,
+              });
+            } else {
+              // Text file — read as UTF-8
+              const text = fs.readFileSync(filePath, 'utf-8');
+              resolvedAttachments.push({ ...att, content: text });
+            }
+          } catch (err) {
+            resolvedAttachments.push({ ...att, content: `[Error reading file: ${att.name}]` });
+          }
+        } else {
+          resolvedAttachments.push(att);
         }
       }
-      fullContent = parts.join('');
     }
-    content = fullContent;
+
+    // Build text content with attachments.
+    // For OpenRouter: text files are inlined; images/PDFs are handled via multimodal API content.
+    // For Claude CLI: all attachments referenced by file path (CLI's Read tool handles images natively).
+    const isCliProvider = this.providerManager.getActiveId() === 'claude-cli';
+    const textParts: string[] = [content];
+    for (const att of resolvedAttachments) {
+      if (att.type === 'file' && att.content) {
+        textParts.push(`\n\n--- Attached file: ${att.name} ---\n${att.content}`);
+      } else if ((att.type === 'image' || att.type === 'pdf') && isCliProvider) {
+        // For CLI: save pasted images (data URIs) to temp files, or reference original path
+        const filePath = this.resolveAttachmentPathForCli(att);
+        if (filePath) {
+          textParts.push(`\n\nThe user attached ${att.type === 'image' ? 'an image' : 'a PDF'} file. Read it with your Read tool: ${filePath}`);
+        }
+      } else if (att.type === 'pdf' && !att.dataUri) {
+        textParts.push(`\n\n[PDF attachment: ${att.name} — content could not be read]`);
+      }
+      // For OpenRouter: images/PDFs with dataUri are handled via multimodal content in the API client
+    }
+    content = textParts.join('');
 
     const toolContext = this.createToolContext();
 
@@ -845,6 +1045,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Detect slash command invocation: /skill-name [args]
     // If the message starts with /, check if it matches a skill and prepend skill invocation
     let skillPreamble = '';
+    let resolvedSkillName = '';
     if (content.startsWith('/') && this.skillRegistry && this.skillExecutor) {
       const parts = content.slice(1).split(/\s+/, 2);
       const skillName = parts[0];
@@ -852,20 +1053,150 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (summary?.enabled) {
         const result = await this.skillExecutor.invoke(skillName);
         if (!result.error && result.instructions) {
-          skillPreamble = `[Skill "/${skillName}" activated. Follow these instructions:]\n\n${result.instructions}\n\n[End of skill instructions. Now handle the user's request below.]\n\n`;
+          resolvedSkillName = skillName;
+          skillPreamble = result.instructions;
           // Strip the /skill-name from the message, keep any arguments
-          content = parts[1] ? content.slice(skillName.length + 2) : `Execute the /${skillName} skill on the current context.`;
+          content = parts[1] ? content.slice(skillName.length + 2) : '';
         }
       }
     }
     if (skillPreamble) {
-      content = skillPreamble + content;
+      // For Claude CLI, avoid mentioning skill names to prevent Claude Code
+      // from confusing Archon skills with its own .claude/skills/.
+      // For other providers, use the standard skill preamble format.
+      const isCliProvider = this.providerManager.getActiveId() === 'claude-cli';
+      const userArgs = content || `Execute the instructions above on the current context.`;
+      if (isCliProvider) {
+        content = `[INSTRUCTIONS — follow these exactly:]\n\n${skillPreamble}\n\n[END INSTRUCTIONS]\n\nIMPORTANT: Do NOT invoke any of your own built-in skills (e.g. /brainstorm, /commit, etc.) — the instructions above already contain everything needed. Do NOT use the Skill tool.\n\n${userArgs}`;
+      } else {
+        content = `[Skill "/${resolvedSkillName}" activated. Follow these instructions:]\n\n${skillPreamble}\n\n[End of skill instructions. Now handle the user's request below.]\n\n${userArgs}`;
+      }
     }
 
     // Create git checkpoint before edit batch
     await this.gitCheckpoint.createCheckpoint('pre-archon-edit');
 
     const webSearchEnabled = this.context.globalState.get<boolean>('archon.webSearchEnabled', true);
+    const activeProviderId = this.providerManager.getActiveId();
+
+    // ── Claude CLI execution path ──
+    if (activeProviderId === 'claude-cli') {
+      const secLevel = this.context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict';
+      const mcpConfigPath = this.context.globalState.get<string>('archon.mcpConfigPath');
+      const executor = this.claudeCliProvider.createExecutor({
+        model: this.selectedModelId,
+        systemPrompt: this.buildSystemPrompt(workspaceRoot, { skipSkills: true }),
+        tools: allTools,
+        toolContext,
+        temperature: undefined,
+        webSearch: webSearchEnabled,
+        securityLevel: secLevel,
+        workspaceRoot,
+        mcpConfigPath,
+        sessionId: this.claudeCliSessionId ?? undefined,
+      });
+
+      this.claudeCliExecutor = executor;
+      this.isRunning = true;
+
+      try {
+        await executor.run(content, {
+          onToken: (token: StreamToken) => this.postMessage({ type: 'streamToken', token }),
+          onToolCall: (tc: ToolCall) => {
+            this.postMessage({ type: 'toolCallStart', toolCall: tc });
+
+            // Intercept AskUserQuestion — abort CLI, show question, wait for answer,
+            // then auto-resume with the user's response as context.
+            // Claude CLI in -p mode auto-answers AskUserQuestion with empty/default,
+            // so we must abort before it continues with that bad answer.
+            if (tc.name === 'AskUserQuestion' && tc.arguments?.questions) {
+              const questions = tc.arguments.questions as Array<{
+                question?: string;
+                header?: string;
+                options?: Array<{ label: string; description?: string }>;
+                multiSelect?: boolean;
+              }>;
+              const firstQ = questions[0];
+              if (firstQ) {
+                // Abort the CLI process before it auto-answers.
+                // Set flag so the finally block doesn't send agentLoopDone.
+                this.cliAbortedForAskUser = true;
+                executor.abort();
+
+                const options = firstQ.options?.map(o => ({
+                  label: o.label,
+                  description: o.description,
+                }));
+                const id = Math.random().toString(36).slice(2, 11);
+                this.pendingAskUser.set(id, {
+                  resolve: (response: string) => {
+                    // User answered — auto-resume the CLI with their answer
+                    this.cliPendingUserAnswer = response;
+                    // Trigger a follow-up message with the answer
+                    const resumeMsg = `The user was asked: "${firstQ.question}"\nThe user answered: "${response}"`;
+                    // Use setTimeout to avoid re-entering handleUserMessage while still in callbacks
+                    setTimeout(() => this.handleUserMessage(resumeMsg), 100);
+                  },
+                  reject: () => {
+                    // User cancelled — just stop
+                    this.cliPendingUserAnswer = null;
+                  },
+                });
+                this.postMessage({
+                  type: 'askUser',
+                  id,
+                  prompt: firstQ.question ?? '',
+                  options,
+                  multiSelect: firstQ.multiSelect,
+                });
+              }
+            }
+
+            // Intercept TodoWrite calls to update the todo widget
+            if (tc.name === 'TodoWrite' && tc.arguments?.todos) {
+              const todos = (tc.arguments.todos as Array<{ content: string; status: string }>).map((t, i) => ({
+                id: `cli-todo-${i}`,
+                content: t.content,
+                status: (t.status === 'pending' ? 'pending' : t.status === 'in_progress' ? 'in_progress' : t.status === 'completed' ? 'completed' : t.status) as import('@archon/core').TodoStatus,
+              }));
+              this.currentTodoList = {
+                title: tc.arguments.title as string | undefined,
+                items: todos,
+                turnId: Date.now().toString(36),
+                startedAt: this.currentTodoList?.startedAt ?? Date.now(),
+              };
+              this.postMessage({ type: 'todosUpdated', title: tc.arguments.title as string | undefined, todos });
+              this.updateTodoStatusBar(todos);
+            }
+          },
+          onToolResult: (result: ToolResult) => this.postMessage({ type: 'toolCallResult', result }),
+          onMessageComplete: (msg: ChatMessage) => this.postMessage({ type: 'messageComplete', message: msg }),
+        });
+        // Persist session ID for --resume on subsequent messages
+        const sid = executor.getSessionId?.();
+        if (sid) {
+          this.claudeCliSessionId = sid;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.postMessage({ type: 'error', error: msg });
+      } finally {
+        this.claudeCliExecutor = undefined;
+        if (this.cliAbortedForAskUser) {
+          // Don't finalize — we're waiting for the user to answer a question,
+          // then handleUserMessage will re-run the CLI. Keep isRunning true
+          // so the stop button stays visible.
+          this.cliAbortedForAskUser = false;
+        } else {
+          this.isRunning = false;
+          this.finalizeTodos();
+          this.postMessage({ type: 'agentLoopDone' });
+        }
+      }
+      return;
+    }
+
+    // ── OpenRouter execution path (existing pipeline-based flow) ──
     const pipeline = await this.getSelectedPipeline();
 
     // Build conversation history for multi-turn continuity
@@ -887,7 +1218,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Create a PipelineExecutor that bridges to the existing infrastructure
     this.pipelineExecutor = new PipelineExecutor(
       {
-        client: this.client,
+        client: this.openRouterProvider.getClient(),
         tools: allTools,
         toolContext,
         defaultModel: this.selectedModelId,
@@ -896,6 +1227,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         webSearch: webSearchEnabled,
         conversationHistory,
         modelPool: modelPoolMap,
+        claudeCliProvider: this.claudeCliProvider,
+        securityLevel: this.context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict',
+        workspaceRoot,
+        attachments: resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
       },
       {
         onToken: (token: StreamToken, branchId?: string) => this.postMessage({ type: 'streamToken', token, branchId }),
@@ -1480,10 +1815,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   // ── Skills Management ──
 
-  private sendSkillsList(): void {
+  private async sendSkillsList(): Promise<void> {
     if (!this.skillRegistry) {
       this.postMessage({ type: 'skillsLoaded', skills: [] });
       return;
+    }
+    // Ensure registry is initialized before reading (handles startup race)
+    if (!this.skillRegistry.isInitialized()) {
+      await this.skillRegistry.initialize();
     }
     const summaries = this.skillRegistry.getAll();
     const skills: SkillInfo[] = summaries.map(s => ({
@@ -1691,7 +2030,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ].join('\n');
 
     try {
-      const text = await this.client.simpleChat(
+      const text = await this.openRouterProvider.simpleChat(
         this.selectedModelId,
         [{ role: 'user', content: extractionPrompt }],
         0.3,

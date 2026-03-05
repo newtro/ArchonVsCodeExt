@@ -16,7 +16,7 @@ import { ChatHistoryDropdown } from './components/ChatHistoryDropdown';
 import { ParallelBranchGroup } from './components/ParallelBranchGroup';
 import { TodoListWidget } from './components/TodoListWidget';
 import { PlusIcon, ClipboardIcon, RefreshIcon } from './components/Icons';
-import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary } from '@archon/core';
+import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary, ProviderInfo } from '@archon/core';
 
 type Tab = 'chat' | 'pipeline' | 'skills' | 'network' | 'benchmarks' | 'settings';
 
@@ -76,6 +76,13 @@ export function App() {
 
   // Model pool state
   const [modelPool, setModelPool] = useState<string[]>([]);
+
+  // Provider state
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState('openrouter');
+  const [claudeCliPath, setClaudeCliPath] = useState('claude');
+  const [claudeCliStatus, setClaudeCliStatus] = useState<{ installed: boolean; authenticated: boolean; version?: string; error?: string } | undefined>(undefined);
+  const [mcpConfigPath, setMcpConfigPath] = useState('');
 
   // Indexing state
   const [indexingStatus, setIndexingStatus] = useState<{
@@ -231,6 +238,32 @@ export function App() {
           setModelPool(msg.modelPool);
           setHasBraveApiKey(msg.hasBraveApiKey);
           setWebSearchEnabled(msg.webSearchEnabled);
+          if (msg.activeProvider) {
+            setActiveProviderId(msg.activeProvider);
+          }
+          break;
+
+        case 'providersLoaded':
+          setProviders(msg.providers);
+          break;
+
+        case 'providerChanged':
+          setActiveProviderId(msg.providerId);
+          break;
+
+        case 'providerStatus':
+          setProviders(prev => prev.map(p =>
+            p.id === msg.providerId ? { ...p, available: msg.available } : p
+          ));
+          break;
+
+        case 'claudeCliStatusResult':
+          setClaudeCliStatus({
+            installed: msg.installed,
+            authenticated: msg.authenticated,
+            version: msg.version,
+            error: msg.error,
+          });
           break;
 
         case 'chatSessionsLoaded':
@@ -392,6 +425,7 @@ export function App() {
     if (isFirstLoad) {
       postMessage({ type: 'loadModels' });
       postMessage({ type: 'loadSettings' });
+      postMessage({ type: 'loadProviders' });
       postMessage({ type: 'searchWorkspaceFiles', query: '' });
       postMessage({ type: 'loadChatSessions' });
       postMessage({ type: 'loadPipelines' });
@@ -462,6 +496,11 @@ export function App() {
   const handleModelSelect = (modelId: string) => {
     setSelectedModel(modelId);
     postMessage({ type: 'selectModel', modelId });
+  };
+
+  const handleProviderChange = (providerId: string) => {
+    setActiveProviderId(providerId);
+    postMessage({ type: 'selectProvider', providerId });
   };
 
   const handleNewChat = () => {
@@ -668,10 +707,11 @@ export function App() {
   };
 
   // Is the currently selected pipeline a non-default pipeline? (for split view)
-  const showPipelineSplitView = isLoading && selectedPipelineId !== 'default';
+  const showPipelineSplitView = isLoading && selectedPipelineId !== 'default' && activeProviderId !== 'claude-cli';
 
-  // Filter models for chat input based on pool
-  const chatModels = modelPool.length > 0
+  // Filter models for chat input based on pool.
+  // Model pool only applies to OpenRouter — Claude CLI always shows all its models.
+  const chatModels = modelPool.length > 0 && activeProviderId === 'openrouter'
     ? models.filter(m => modelPool.includes(m.id))
     : models;
 
@@ -679,7 +719,9 @@ export function App() {
     <div className="app">
       {/* Tab bar */}
       <div className="tab-bar">
-        {(['chat', 'pipeline', 'skills', 'network', 'benchmarks', 'settings'] as Tab[]).map(tab => (
+        {(['chat', 'pipeline', 'skills', 'network', 'benchmarks', 'settings'] as Tab[])
+          .filter(tab => !(tab === 'pipeline' && activeProviderId === 'claude-cli'))
+          .map(tab => (
           <button
             key={tab}
             className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
@@ -873,6 +915,10 @@ export function App() {
               setSelectedPipelineId(pipelineId);
               postMessage({ type: 'selectPipeline', pipelineId });
             }}
+            providers={providers}
+            activeProviderId={activeProviderId}
+            onProviderChange={handleProviderChange}
+            skills={skillsList.filter(s => s.enabled).map(s => ({ name: s.name, description: s.description }))}
           />
         </>
       )}
@@ -990,6 +1036,20 @@ export function App() {
           onWebSearchToggle={handleWebSearchToggle}
           todoDisplayMode={todoDisplayMode}
           onTodoDisplayModeChange={setTodoDisplayMode}
+          claudeCliStatus={claudeCliStatus}
+          claudeCliPath={claudeCliPath}
+          onClaudeCliPathChange={(path) => {
+            setClaudeCliPath(path);
+            postMessage({ type: 'setClaudeCliPath', path });
+          }}
+          onCheckClaudeCliStatus={() => {
+            postMessage({ type: 'setClaudeCliPath', path: claudeCliPath });
+          }}
+          mcpConfigPath={mcpConfigPath}
+          onMcpConfigPathChange={(path) => {
+            setMcpConfigPath(path);
+            postMessage({ type: 'setMcpConfigPath', path });
+          }}
         />
       )}
     </div>

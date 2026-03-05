@@ -134,6 +134,64 @@ function toolSummary(name: string, args?: Record<string, unknown>): string {
       const todos = args.todos as unknown[] ?? [];
       return todoTitle ? `Todos: ${todoTitle} (${todos.length} items)` : `Todos (${todos.length} items)`;
     }
+    // ── Claude Code CLI tool names ──
+    case 'Read': {
+      const filePath = args.file_path as string ?? args.path as string ?? '';
+      return `Read ${filePath}`;
+    }
+    case 'Write': {
+      const filePath = args.file_path as string ?? args.path as string ?? '';
+      return `Write ${filePath}`;
+    }
+    case 'Edit': {
+      const filePath = args.file_path as string ?? args.path as string ?? '';
+      return `Edit ${filePath}`;
+    }
+    case 'Bash': {
+      const cmd = args.command as string ?? '';
+      return `Run \`${truncate(cmd, 60)}\``;
+    }
+    case 'Glob': {
+      const pat = args.pattern as string ?? '';
+      return `Find files "${pat}"`;
+    }
+    case 'Grep': {
+      const pat = args.pattern as string ?? '';
+      return `Search "${truncate(pat, 50)}"`;
+    }
+    case 'ToolSearch': {
+      const q = args.query as string ?? '';
+      return `Tool search: "${truncate(q, 50)}"`;
+    }
+    case 'Skill': {
+      const skill = args.skill as string ?? '';
+      const skillArgs = args.args as string ?? '';
+      return skillArgs ? `Skill /${skill}: "${truncate(skillArgs, 50)}"` : `Skill /${skill}`;
+    }
+    case 'TodoWrite': {
+      const todos = args.todos as unknown[] ?? [];
+      const title = args.title as string | undefined;
+      return title ? `Todos: ${title} (${todos.length} items)` : `Todos (${todos.length} items)`;
+    }
+    case 'AskUserQuestion': {
+      const questions = args.questions as Array<{ question?: string }> | undefined;
+      const q = questions?.[0]?.question ?? args.question as string ?? '';
+      return q ? `Ask user: "${truncate(q, 80)}"` : 'Ask user';
+    }
+    case 'WebFetch': {
+      const url = args.url as string ?? '';
+      return `Fetch ${truncate(url, 60)}`;
+    }
+    case 'WebSearch': {
+      const q = args.query as string ?? '';
+      return `Web search "${truncate(q, 50)}"`;
+    }
+    case 'Agent': {
+      const desc = args.description as string ?? args.prompt as string ?? '';
+      return `Agent: "${truncate(desc, 60)}"`;
+    }
+    case 'NotebookEdit':
+      return `Edit notebook`;
     default:
       return name;
   }

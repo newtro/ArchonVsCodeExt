@@ -20,6 +20,12 @@ interface Props {
   onWebSearchToggle: (enabled: boolean) => void;
   todoDisplayMode: 'pinned' | 'inline' | 'floating';
   onTodoDisplayModeChange: (mode: 'pinned' | 'inline' | 'floating') => void;
+  claudeCliStatus?: { installed: boolean; authenticated: boolean; version?: string; error?: string };
+  claudeCliPath: string;
+  onClaudeCliPathChange: (path: string) => void;
+  onCheckClaudeCliStatus: () => void;
+  mcpConfigPath: string;
+  onMcpConfigPathChange: (path: string) => void;
 }
 
 export function SettingsPanel({
@@ -36,6 +42,12 @@ export function SettingsPanel({
   onWebSearchToggle,
   todoDisplayMode,
   onTodoDisplayModeChange,
+  claudeCliStatus,
+  claudeCliPath,
+  onClaudeCliPathChange,
+  onCheckClaudeCliStatus,
+  mcpConfigPath,
+  onMcpConfigPathChange,
 }: Props) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [braveKeyInput, setBraveKeyInput] = useState('');
@@ -117,6 +129,47 @@ export function SettingsPanel({
           <button onClick={handleSetApiKey} className="settings-btn">Save</button>
         </div>
         <p className="settings-hint">Stored securely in VS Code SecretStorage.</p>
+      </section>
+
+      {/* Claude CLI */}
+      <section className="settings-section">
+        <h4>Claude Code CLI</h4>
+        <p className="settings-hint">
+          Use your Claude Pro/Max subscription through the official Claude Code CLI.
+          Install it from <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener">docs.anthropic.com</a>.
+        </p>
+        <div className="settings-row">
+          <input
+            type="text"
+            value={claudeCliPath}
+            onChange={(e) => onClaudeCliPathChange(e.target.value)}
+            placeholder="claude (or full path)"
+            className="settings-input"
+          />
+          <button onClick={onCheckClaudeCliStatus} className="settings-btn">Check</button>
+        </div>
+        {claudeCliStatus && (
+          <div className={`cli-status ${claudeCliStatus.installed && claudeCliStatus.authenticated ? 'cli-status-ok' : 'cli-status-warn'}`}>
+            {claudeCliStatus.installed
+              ? claudeCliStatus.authenticated
+                ? `Connected (v${claudeCliStatus.version ?? 'unknown'})`
+                : 'Installed but not authenticated. Run: claude auth login'
+              : claudeCliStatus.error ?? 'Not found. Install Claude Code CLI first.'}
+          </div>
+        )}
+        <h4 style={{ marginTop: '12px' }}>MCP Config (optional)</h4>
+        <p className="settings-hint">
+          Path to an MCP server config JSON file. Passed to Claude CLI via --mcp-config.
+        </p>
+        <div className="settings-row">
+          <input
+            type="text"
+            value={mcpConfigPath}
+            onChange={(e) => onMcpConfigPathChange(e.target.value)}
+            placeholder="/path/to/mcp-config.json"
+            className="settings-input"
+          />
+        </div>
       </section>
 
       {/* Web Search */}
