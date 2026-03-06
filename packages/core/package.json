@@ -12,10 +12,11 @@
     "test": "echo 'no tests yet'"
   },
   "dependencies": {
-    "@openrouter/sdk": "^0.9.11"
+    "@openrouter/sdk": "^0.9.11",
+    "openai": "^6.27.0"
   },
   "devDependencies": {
-    "typescript": "^5.8.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
   }
 }

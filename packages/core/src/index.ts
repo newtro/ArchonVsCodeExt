@@ -7,7 +7,7 @@ export type { OpenRouterConfig } from './models/openrouter-client';
 
 // Agent
 export { AgentLoop } from './agent/agent-loop';
-export type { AgentLoopHooks } from './agent/agent-loop';
+export type { AgentLoopHooks, StreamingLLMClient } from './agent/agent-loop';
 
 // Hooks
 export { HookEngine, HookVariableStore, createHookBridge, getHookTemplates } from './hooks';
@@ -57,6 +57,24 @@ export type {
 export { OpenRouterProvider } from './providers/openrouter-provider';
 export { ClaudeCliProvider } from './providers/claude-cli-provider';
 export type { ClaudeCliConfig } from './providers/claude-cli-provider';
+export { OpenAIProvider } from './providers/openai-provider';
+export type { OpenAIProviderConfig } from './providers/openai-provider';
+export { OpenAIClient } from './providers/openai-client';
+export type { OpenAIClientConfig } from './providers/openai-client';
+export {
+  startOAuthFlow,
+  refreshTokens,
+  extractSubscriptionInfo,
+  TokenRefreshManager,
+  OpenAIAuthError,
+} from './providers/openai-auth';
+export type {
+  OpenAIAuthMode,
+  OpenAITokens,
+  OpenAISubscriptionInfo,
+  OpenAIAuthState,
+  OpenAIAuthCallbacks,
+} from './providers/openai-auth';
 export { ProviderManager } from './providers/provider-manager';
 export { detectClaudeCli } from './providers/claude-cli-detector';
 export type { ClaudeCliStatus } from './providers/claude-cli-detector';

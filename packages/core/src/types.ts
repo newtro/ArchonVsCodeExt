@@ -290,6 +290,8 @@ export type ExtensionMessage =
   | { type: 'providerChanged'; providerId: string }
   | { type: 'providerStatus'; providerId: string; available: boolean; error?: string }
   | { type: 'claudeCliStatusResult'; installed: boolean; authenticated: boolean; version?: string; error?: string }
+  // OpenAI
+  | { type: 'openaiAuthStatus'; mode: string; authenticated: boolean; planType?: string; email?: string; error?: string }
   // Context meter
   | { type: 'contextMeterUpdate'; data: ContextMeterData | null }
   // Hooks
@@ -375,6 +377,11 @@ export type WebviewMessage =
   | { type: 'loadProviders' }
   | { type: 'setClaudeCliPath'; path: string }
   | { type: 'setMcpConfigPath'; path: string }
+  // OpenAI
+  | { type: 'setOpenAIApiKey'; key: string }
+  | { type: 'setOpenAIAuthMode'; mode: string }
+  | { type: 'startOpenAIOAuth' }
+  | { type: 'disconnectOpenAI' }
   // Context meter
   | { type: 'compressContext' }
   | { type: 'resetContext' }

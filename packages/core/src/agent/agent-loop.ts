@@ -3,7 +3,6 @@
  * executes tool calls, feeds results back, repeats until completion.
  */
 
-import { OpenRouterClient } from '../models/openrouter-client';
 import type {
   AgentConfig,
   Attachment,
@@ -15,6 +14,20 @@ import type {
   ToolResult,
   SubAgentMessage,
 } from '../types';
+
+/**
+ * Any LLM client that can stream chat completions.
+ * Both OpenRouterClient and OpenAIClient implement this interface.
+ */
+export interface StreamingLLMClient {
+  streamChat(
+    model: string,
+    messages: ChatMessage[],
+    tools?: ToolDefinition[],
+    temperature?: number,
+    options?: { webSearch?: boolean },
+  ): AsyncGenerator<StreamToken>;
+}
 
 /**
  * Hook callbacks that the HookEngine (or any middleware) can wire into.
@@ -44,7 +57,7 @@ function generateId(): string {
 }
 
 export class AgentLoop {
-  private client: OpenRouterClient;
+  private client: StreamingLLMClient;
   private config: AgentConfig;
   private messages: ChatMessage[] = [];
   private toolContext: ToolContext;
@@ -58,7 +71,7 @@ export class AgentLoop {
   private hooks: AgentLoopHooks;
 
   constructor(
-    client: OpenRouterClient,
+    client: StreamingLLMClient,
     config: AgentConfig,
     toolContext: ToolContext,
     callbacks: {

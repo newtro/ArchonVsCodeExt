@@ -26,6 +26,7 @@ interface Props {
   onCheckClaudeCliStatus: () => void;
   mcpConfigPath: string;
   onMcpConfigPathChange: (path: string) => void;
+  openaiAuthStatus?: { mode: string; authenticated: boolean; planType?: string; email?: string; error?: string };
 }
 
 export function SettingsPanel({
@@ -48,12 +49,24 @@ export function SettingsPanel({
   onCheckClaudeCliStatus,
   mcpConfigPath,
   onMcpConfigPathChange,
+  openaiAuthStatus,
 }: Props) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [braveKeyInput, setBraveKeyInput] = useState('');
+  const [openaiKeyInput, setOpenaiKeyInput] = useState('');
+  const [openaiAuthMode, setOpenaiAuthMode] = useState<'api-key' | 'subscription'>(
+    (openaiAuthStatus?.mode as 'api-key' | 'subscription') ?? 'api-key'
+  );
   const [addModelSearch, setAddModelSearch] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Sync auth mode when status comes in from extension
+  useEffect(() => {
+    if (openaiAuthStatus?.mode === 'api-key' || openaiAuthStatus?.mode === 'subscription') {
+      setOpenaiAuthMode(openaiAuthStatus.mode);
+    }
+  }, [openaiAuthStatus?.mode]);
 
   const handleSetApiKey = () => {
     if (apiKeyInput.trim()) {
@@ -65,6 +78,26 @@ export function SettingsPanel({
   const handleSetBraveApiKey = () => {
     postMessage({ type: 'setBraveApiKey', key: braveKeyInput.trim() });
     setBraveKeyInput('');
+  };
+
+  const handleSetOpenAIApiKey = () => {
+    if (openaiKeyInput.trim()) {
+      postMessage({ type: 'setOpenAIApiKey', key: openaiKeyInput.trim() });
+      setOpenaiKeyInput('');
+    }
+  };
+
+  const handleOpenAIAuthModeChange = (mode: 'api-key' | 'subscription') => {
+    setOpenaiAuthMode(mode);
+    postMessage({ type: 'setOpenAIAuthMode', mode });
+  };
+
+  const handleStartOpenAIOAuth = () => {
+    postMessage({ type: 'startOpenAIOAuth' });
+  };
+
+  const handleDisconnectOpenAI = () => {
+    postMessage({ type: 'disconnectOpenAI' });
   };
 
   // Models not yet in the pool, filtered by search
@@ -115,9 +148,9 @@ export function SettingsPanel({
     <div className="settings-panel">
       <h3>Settings</h3>
 
-      {/* API Key */}
+      {/* OpenRouter API Key */}
       <section className="settings-section">
-        <h4>API Key</h4>
+        <h4>OpenRouter API Key</h4>
         <div className="settings-row">
           <input
             type="password"
@@ -170,6 +203,83 @@ export function SettingsPanel({
             className="settings-input"
           />
         </div>
+      </section>
+
+      {/* OpenAI */}
+      <section className="settings-section">
+        <h4>OpenAI</h4>
+        <p className="settings-hint">
+          Use OpenAI models (GPT-4.1, o3, o4-mini, etc.) via API key or ChatGPT subscription.
+        </p>
+
+        <div className="settings-radio-group" style={{ marginBottom: '8px' }}>
+          <label className="settings-radio">
+            <input
+              type="radio"
+              name="openaiAuth"
+              value="api-key"
+              checked={openaiAuthMode === 'api-key'}
+              onChange={() => handleOpenAIAuthModeChange('api-key')}
+            />
+            <span className="radio-label">API Key</span>
+            <span className="radio-desc">Pay-as-you-go with an OpenAI API key.</span>
+          </label>
+          <label className="settings-radio">
+            <input
+              type="radio"
+              name="openaiAuth"
+              value="subscription"
+              checked={openaiAuthMode === 'subscription'}
+              onChange={() => handleOpenAIAuthModeChange('subscription')}
+            />
+            <span className="radio-label">ChatGPT Subscription</span>
+            <span className="radio-desc">Use your Plus/Pro/Team/Enterprise plan.</span>
+          </label>
+        </div>
+
+        {openaiAuthMode === 'api-key' ? (
+          <div>
+            <div className="settings-row">
+              <input
+                type="password"
+                value={openaiKeyInput}
+                onChange={(e) => setOpenaiKeyInput(e.target.value)}
+                placeholder="sk-..."
+                className="settings-input"
+              />
+              <button onClick={handleSetOpenAIApiKey} className="settings-btn">Save</button>
+            </div>
+            <p className="settings-hint">Stored securely in VS Code SecretStorage.</p>
+          </div>
+        ) : (
+          <div>
+            {openaiAuthStatus?.authenticated && openaiAuthStatus.mode === 'subscription' ? (
+              <div>
+                <div className="cli-status cli-status-ok">
+                  Connected{openaiAuthStatus.planType ? ` (${openaiAuthStatus.planType} plan)` : ''}
+                  {openaiAuthStatus.email ? ` — ${openaiAuthStatus.email}` : ''}
+                </div>
+                <button onClick={handleDisconnectOpenAI} className="settings-btn" style={{ marginTop: '6px' }}>
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <div>
+                <button onClick={handleStartOpenAIOAuth} className="settings-btn">
+                  Sign in with ChatGPT
+                </button>
+                {openaiAuthStatus?.error && (
+                  <div className="cli-status cli-status-warn" style={{ marginTop: '6px' }}>
+                    {openaiAuthStatus.error}
+                  </div>
+                )}
+                <p className="settings-hint" style={{ marginTop: '6px' }}>
+                  Opens a browser window to authenticate with your ChatGPT account.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* Web Search */}
