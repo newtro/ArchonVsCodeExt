@@ -16,9 +16,10 @@ import { ChatHistoryDropdown } from './components/ChatHistoryDropdown';
 import { ParallelBranchGroup } from './components/ParallelBranchGroup';
 import { TodoListWidget } from './components/TodoListWidget';
 import { PlusIcon, ClipboardIcon, RefreshIcon } from './components/Icons';
-import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary, ProviderInfo, ContextMeterData } from '@archon/core';
+import { HooksPanel } from './components/HooksPanel';
+import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary, ProviderInfo, ContextMeterData, HookChain, HookExecutionEvent, HookTemplate as HookTemplateType, HookPoint, HookNodeType, HookNode, VariableDefinition } from '@archon/core';
 
-type Tab = 'chat' | 'pipeline' | 'skills' | 'network' | 'benchmarks' | 'settings';
+type Tab = 'chat' | 'pipeline' | 'hooks' | 'skills' | 'network' | 'benchmarks' | 'settings';
 
 /** All tool names available in the extension (core + LSP + extended). */
 const AVAILABLE_TOOLS = [
@@ -112,6 +113,15 @@ export function App() {
   const [showConvertWizard, setShowConvertWizard] = useState(false);
   const [convertingSkill, setConvertingSkill] = useState(false);
   const [generatedSkill, setGeneratedSkill] = useState<{ name: string; description: string; tags: string[]; content: string } | null>(null);
+
+  // Hooks state
+  const [hookChains, setHookChains] = useState<HookChain[]>([]);
+  const [hookVariableDefs, setHookVariableDefs] = useState<VariableDefinition[]>([]);
+  const [hookTemplates, setHookTemplates] = useState<HookTemplateType[]>([]);
+  const [hookDebugEvents, setHookDebugEvents] = useState<HookExecutionEvent[]>([]);
+  const [hookDebugVariables, setHookDebugVariables] = useState<Record<string, unknown>>({});
+  const [hooksEnabled, setHooksEnabled] = useState(true);
+  const [hooksLive, setHooksLive] = useState(false);
 
   // Listen for messages from the extension host
   useEffect(() => {
@@ -426,6 +436,23 @@ export function App() {
         case 'contextMeterUpdate':
           setContextMeter(msg.data);
           break;
+
+        // Hook messages
+        case 'hookConfigLoaded':
+          setHookChains((msg as any).config?.chains ?? []);
+          setHookVariableDefs((msg as any).config?.variables ?? []);
+          setHookTemplates((msg as any).config?.templates ?? []);
+          setHooksEnabled((msg as any).config?.enabled ?? true);
+          break;
+
+        case 'hookDebug':
+          setHookDebugEvents(prev => [...prev, (msg as any).event]);
+          setHooksLive(true);
+          break;
+
+        case 'hookVariables':
+          setHookDebugVariables((msg as any).variables ?? {});
+          break;
       }
     });
 
@@ -437,6 +464,7 @@ export function App() {
       postMessage({ type: 'loadChatSessions' });
       postMessage({ type: 'loadPipelines' });
       postMessage({ type: 'loadSkills' });
+      postMessage({ type: 'loadHooks' } as any);
       setIsFirstLoad(false);
     }
 
@@ -713,6 +741,15 @@ export function App() {
     postMessage({ type: 'confirmDeletePipeline', pipelineId: selectedPipelineId });
   };
 
+  const getDefaultNodeConfig = (type: HookNodeType) => {
+    switch (type) {
+      case 'llm': return { prompt: '', maxTokens: 0, temperature: 0.3 };
+      case 'template': return { templateId: hookTemplates[0]?.id ?? '' };
+      case 'script': return { runtime: 'node' as const, timeout: 5000 };
+      case 'decision': return { mode: 'regex' as const, onTrue: 'continue' as const, onFalse: 'skip' as const };
+    }
+  };
+
   // Is the currently selected pipeline a non-default pipeline? (for split view)
   const showPipelineSplitView = isLoading && selectedPipelineId !== 'default' && activeProviderId !== 'claude-cli';
 
@@ -726,7 +763,7 @@ export function App() {
     <div className="app">
       {/* Tab bar */}
       <div className="tab-bar">
-        {(['chat', 'pipeline', 'skills', 'network', 'benchmarks', 'settings'] as Tab[])
+        {(['chat', 'pipeline', 'hooks', 'skills', 'network', 'benchmarks', 'settings'] as Tab[])
           .filter(tab => !(tab === 'pipeline' && activeProviderId === 'claude-cli'))
           .map(tab => (
           <button
@@ -736,6 +773,7 @@ export function App() {
           >
             {tab === 'chat' ? 'Chat' :
              tab === 'pipeline' ? 'Pipeline' :
+             tab === 'hooks' ? 'Hooks' :
              tab === 'skills' ? 'Skills' :
              tab === 'network' ? 'Network' :
              tab === 'benchmarks' ? 'Benchmarks' : 'Settings'}
@@ -983,6 +1021,101 @@ export function App() {
             enhancingNodeId={enhancingNodeId}
           />
         </div>
+      )}
+
+      {/* Hooks Tab */}
+      {activeTab === 'hooks' && (
+        <HooksPanel
+          chains={hookChains}
+          templates={hookTemplates}
+          debugEvents={hookDebugEvents}
+          debugVariables={hookDebugVariables}
+          isLive={hooksLive}
+          hooksEnabled={hooksEnabled}
+          variableDefs={hookVariableDefs}
+          providers={providers}
+          models={models}
+          modelPool={modelPool}
+          activeProviderId={activeProviderId}
+          onAddChain={(hookPoint: HookPoint) => {
+            const newChain: HookChain = {
+              id: `chain-${Math.random().toString(36).slice(2, 8)}`,
+              hookPoint,
+              priority: (hookChains.filter(c => c.hookPoint === hookPoint).length + 1) * 10,
+              mode: 'sequential',
+              nodes: [],
+              enabled: true,
+            };
+            setHookChains(prev => [...prev, newChain]);
+          }}
+          onRemoveChain={(chainId: string) => {
+            setHookChains(prev => prev.filter(c => c.id !== chainId));
+          }}
+          onToggleChain={(chainId: string, enabled: boolean) => {
+            setHookChains(prev => prev.map(c => c.id === chainId ? { ...c, enabled } : c));
+          }}
+          onUpdateChainPriority={(chainId: string, priority: number) => {
+            setHookChains(prev => prev.map(c => c.id === chainId ? { ...c, priority } : c));
+          }}
+          onAddNode={(chainId: string, nodeType: HookNodeType) => {
+            const newNode: HookNode = {
+              id: `node-${Math.random().toString(36).slice(2, 8)}`,
+              name: `New ${nodeType} node`,
+              type: nodeType,
+              config: getDefaultNodeConfig(nodeType),
+              timing: 'sync',
+              enabled: true,
+            };
+            setHookChains(prev => prev.map(c =>
+              c.id === chainId ? { ...c, nodes: [...c.nodes, newNode] } : c
+            ));
+          }}
+          onRemoveNode={(chainId: string, nodeId: string) => {
+            setHookChains(prev => prev.map(c =>
+              c.id === chainId ? { ...c, nodes: c.nodes.filter(n => n.id !== nodeId) } : c
+            ));
+          }}
+          onUpdateNode={(chainId: string, nodeId: string, updates: Partial<HookNode>) => {
+            setHookChains(prev => prev.map(c =>
+              c.id === chainId
+                ? { ...c, nodes: c.nodes.map(n => n.id === nodeId ? { ...n, ...updates } : n) }
+                : c
+            ));
+          }}
+          onToggleEnabled={(enabled: boolean) => {
+            setHooksEnabled(enabled);
+            postMessage({ type: 'setHooksEnabled', enabled } as any);
+          }}
+          onUpdateVariableDefs={(defs: VariableDefinition[]) => {
+            setHookVariableDefs(defs);
+          }}
+          onSaveConfig={() => {
+            postMessage({ type: 'saveHookConfig', chains: hookChains, variables: hookVariableDefs, enabled: hooksEnabled } as any);
+          }}
+          onLoadConfig={() => {
+            postMessage({ type: 'loadHooks' } as any);
+          }}
+          onExportConfig={() => {
+            postMessage({ type: 'exportHookConfig' } as any);
+          }}
+          onApplyTemplate={(template: HookTemplateType) => {
+            const newChain: HookChain = {
+              id: `chain-${Math.random().toString(36).slice(2, 8)}`,
+              hookPoint: template.hookPoint as HookPoint,
+              priority: (hookChains.filter(c => c.hookPoint === template.hookPoint).length + 1) * 10,
+              mode: 'sequential',
+              nodes: template.nodes.map(n => ({
+                ...n,
+                id: `node-${Math.random().toString(36).slice(2, 8)}`,
+              })),
+              enabled: true,
+            };
+            setHookChains(prev => [...prev, newChain]);
+          }}
+          onImportConfig={() => {
+            postMessage({ type: 'importHookConfig' } as any);
+          }}
+        />
       )}
 
       {/* Skills Tab */}

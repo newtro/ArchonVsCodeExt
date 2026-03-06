@@ -7,6 +7,19 @@ export type { OpenRouterConfig } from './models/openrouter-client';
 
 // Agent
 export { AgentLoop } from './agent/agent-loop';
+export type { AgentLoopHooks } from './agent/agent-loop';
+
+// Hooks
+export { HookEngine, HookVariableStore, createHookBridge, getHookTemplates } from './hooks';
+export type { HookEngineConfig, HookFireResult } from './hooks';
+export type {
+  HookPoint, HookTiming, HookNodeType, HookAction,
+  VariableScope, VariableType, VariableDefinition,
+  HookNode, HookChain, HookConfiguration, CompositionBlock,
+  HookContext, HookPointData, HookResult,
+  HookExecutionEvent, HookExecutionStatus, HookDebugState,
+  HookTemplate,
+} from './hooks';
 
 // Tools
 export { createCoreTools } from './tools/tool-registry';

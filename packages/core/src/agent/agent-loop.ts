@@ -16,6 +16,29 @@ import type {
   SubAgentMessage,
 } from '../types';
 
+/**
+ * Hook callbacks that the HookEngine (or any middleware) can wire into.
+ * All are optional — when absent, the loop behaves as before.
+ */
+export interface AgentLoopHooks {
+  /** Called before each LLM API call. Can modify the messages array. */
+  onBeforeLLMCall?(messages: ChatMessage[]): Promise<ChatMessage[]>;
+  /** Called after LLM response. Can modify text content and tool calls. */
+  onAfterLLMCall?(response: { textContent: string; toolCalls: ToolCall[] }): Promise<{ textContent: string; toolCalls: ToolCall[] }>;
+  /** Called before each tool execution. Return null to block. */
+  onBeforeToolExec?(toolCall: ToolCall): Promise<ToolCall | null>;
+  /** Called after each tool execution. Can modify the result. */
+  onAfterToolExec?(toolCall: ToolCall, result: ToolResult): Promise<ToolResult>;
+  /** Called before each loop iteration. Can inject messages or signal stop. */
+  onIteration?(state: { iteration: number; messages: ChatMessage[] }): Promise<{ stop?: boolean; inject?: string[] }>;
+  /** Called when the loop starts a turn. */
+  onTurnStart?(userMessage: string, attachments?: Attachment[]): Promise<{ userMessage: string; attachments?: Attachment[] }>;
+  /** Called when the loop ends a turn. */
+  onTurnEnd?(messages: ChatMessage[], toolCallsMade: ToolCall[]): Promise<void>;
+  /** Called on unrecoverable error. */
+  onTurnError?(error: Error, partialHistory: ChatMessage[]): Promise<void>;
+}
+
 function generateId(): string {
   return Math.random().toString(36).slice(2, 11);
 }
@@ -32,6 +55,7 @@ export class AgentLoop {
   private onToolResult: (result: ToolResult) => void;
   private onMessageComplete: (msg: ChatMessage) => void;
   private parallelSpawn?: (tasks: Array<{ systemPrompt: string; task: string; model?: string }>) => Promise<Array<{ content: string; subMessages: SubAgentMessage[] }>>;
+  private hooks: AgentLoopHooks;
 
   constructor(
     client: OpenRouterClient,
@@ -44,6 +68,7 @@ export class AgentLoop {
       onMessageComplete: (msg: ChatMessage) => void;
       parallelSpawn?: (tasks: Array<{ systemPrompt: string; task: string; model?: string }>) => Promise<Array<{ content: string; subMessages: SubAgentMessage[] }>>;
     },
+    hooks?: AgentLoopHooks,
   ) {
     this.client = client;
     this.config = config;
@@ -53,6 +78,7 @@ export class AgentLoop {
     this.onToolResult = callbacks.onToolResult;
     this.onMessageComplete = callbacks.onMessageComplete;
     this.parallelSpawn = callbacks.parallelSpawn;
+    this.hooks = hooks ?? {};
 
     // Initialize with system prompt
     this.messages.push({
@@ -70,6 +96,13 @@ export class AgentLoop {
   async run(userMessage: string, attachments?: Attachment[]): Promise<void> {
     this.abortController = new AbortController();
 
+    // Hook: turn:start — allow hooks to modify the user message
+    if (this.hooks.onTurnStart) {
+      const modified = await this.hooks.onTurnStart(userMessage, attachments);
+      userMessage = modified.userMessage;
+      attachments = modified.attachments;
+    }
+
     this.messages.push({
       id: generateId(),
       role: 'user',
@@ -79,11 +112,38 @@ export class AgentLoop {
     });
 
     const maxIterations = this.config.maxIterations ?? Infinity;
+    const allToolCalls: ToolCall[] = [];
 
+    try {
     for (let i = 0; i < maxIterations; i++) {
       if (this.abortController.signal.aborted) break;
 
-      const { textContent, toolCalls } = await this.streamResponse();
+      // Hook: loop:iterate — allow hooks to inject messages or stop
+      if (this.hooks.onIteration) {
+        const iterResult = await this.hooks.onIteration({ iteration: i, messages: this.messages });
+        if (iterResult.stop) break;
+        if (iterResult.inject) {
+          for (const msg of iterResult.inject) {
+            this.messages.push({ id: generateId(), role: 'user', content: msg, timestamp: Date.now() });
+          }
+        }
+      }
+
+      // Hook: llm:before — allow hooks to modify messages before LLM call
+      let messagesForLLM = this.messages;
+      if (this.hooks.onBeforeLLMCall) {
+        messagesForLLM = await this.hooks.onBeforeLLMCall([...this.messages]);
+        // Don't mutate internal messages — hooks see a copy
+      }
+
+      let { textContent, toolCalls } = await this.streamResponse(messagesForLLM);
+
+      // Hook: llm:after — allow hooks to modify the LLM response
+      if (this.hooks.onAfterLLMCall) {
+        const modified = await this.hooks.onAfterLLMCall({ textContent, toolCalls });
+        textContent = modified.textContent;
+        toolCalls = modified.toolCalls;
+      }
 
       // Build the assistant message
       const assistantMsg: ChatMessage = {
@@ -108,7 +168,10 @@ export class AgentLoop {
 
       if (allSpawn && toolCalls.length >= 1 && this.parallelSpawn) {
         // Delegate parallel spawn to the executor for branch-isolated streaming
-        for (const tc of toolCalls) this.onToolCall(tc);
+        for (const tc of toolCalls) {
+          allToolCalls.push(tc);
+          this.onToolCall(tc);
+        }
 
         const tasks = toolCalls.map(tc => ({
           systemPrompt: tc.arguments.system_prompt as string,
@@ -118,13 +181,17 @@ export class AgentLoop {
 
         const spawnResults = await this.parallelSpawn(tasks);
 
-        for (let i = 0; i < toolCalls.length; i++) {
-          const sr = spawnResults[i];
-          const result: ToolResult = {
-            toolCallId: toolCalls[i].id,
+        for (let j = 0; j < toolCalls.length; j++) {
+          const sr = spawnResults[j];
+          let result: ToolResult = {
+            toolCallId: toolCalls[j].id,
             content: sr?.content ?? 'No result',
             subMessages: sr?.subMessages,
           };
+          // Hook: tool:after
+          if (this.hooks.onAfterToolExec) {
+            result = await this.hooks.onAfterToolExec(toolCalls[j], result);
+          }
           this.onToolResult(result);
           this.messages.push({
             id: generateId(),
@@ -139,8 +206,40 @@ export class AgentLoop {
         for (const tc of toolCalls) {
           if (this.abortController.signal.aborted) break;
 
-          this.onToolCall(tc);
-          const result = await this.executeTool(tc);
+          // Hook: tool:before — can modify args or block execution
+          let currentTc: ToolCall | null = tc;
+          if (this.hooks.onBeforeToolExec) {
+            currentTc = await this.hooks.onBeforeToolExec(tc);
+          }
+
+          if (!currentTc) {
+            // Hook blocked this tool call — push a blocked result
+            const blockedResult: ToolResult = {
+              toolCallId: tc.id,
+              content: `Tool "${tc.name}" was blocked by a hook`,
+              isError: false,
+            };
+            this.onToolCall(tc);
+            this.onToolResult(blockedResult);
+            this.messages.push({
+              id: generateId(),
+              role: 'tool',
+              content: blockedResult.content,
+              toolCallId: blockedResult.toolCallId,
+              timestamp: Date.now(),
+            });
+            continue;
+          }
+
+          allToolCalls.push(currentTc);
+          this.onToolCall(currentTc);
+          let result = await this.executeTool(currentTc);
+
+          // Hook: tool:after — can modify the result
+          if (this.hooks.onAfterToolExec) {
+            result = await this.hooks.onAfterToolExec(currentTc, result);
+          }
+
           this.onToolResult(result);
 
           this.messages.push({
@@ -157,7 +256,28 @@ export class AgentLoop {
       this.drainInjections();
     }
 
-    this.abortController = null;
+    // Hook: turn:end
+    if (this.hooks.onTurnEnd) {
+      await this.hooks.onTurnEnd(this.messages, allToolCalls);
+    }
+
+    } catch (err) {
+      // Hook: turn:error
+      if (this.hooks.onTurnError) {
+        await this.hooks.onTurnError(
+          err instanceof Error ? err : new Error(String(err)),
+          this.messages,
+        );
+      }
+      throw err;
+    } finally {
+      this.abortController = null;
+    }
+  }
+
+  /** Set or replace hook callbacks (used by HookEngine to wire in). */
+  setHooks(hooks: AgentLoopHooks): void {
+    this.hooks = hooks;
   }
 
   cancel(): void {
@@ -207,13 +327,13 @@ export class AgentLoop {
     this.messages = [this.messages[0], ...history];
   }
 
-  private async streamResponse(): Promise<{ textContent: string; toolCalls: ToolCall[] }> {
+  private async streamResponse(messages?: ChatMessage[]): Promise<{ textContent: string; toolCalls: ToolCall[] }> {
     let textContent = '';
     const toolCalls: ToolCall[] = [];
 
     const stream = this.client.streamChat(
       this.config.model,
-      this.messages,
+      messages ?? this.messages,
       this.config.tools,
       this.config.temperature,
       { webSearch: this.config.webSearch },

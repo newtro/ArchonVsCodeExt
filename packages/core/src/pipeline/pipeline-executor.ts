@@ -17,6 +17,7 @@ import type {
   ToolNodeConfig,
 } from './types';
 import { AgentLoop } from '../agent/agent-loop';
+import type { AgentLoopHooks } from '../agent/agent-loop';
 import { OpenRouterClient } from '../models/openrouter-client';
 import type {
   ToolContext,
@@ -74,6 +75,10 @@ export interface PipelineExecutorConfig {
 
   /** Resolved attachments from the user message (images, files, PDFs). */
   attachments?: import('../types').Attachment[];
+
+  /** Optional hook callbacks for the agentic loop middleware system.
+   *  When provided, every AgentLoop created by this executor will have these hooks wired in. */
+  agentLoopHooks?: AgentLoopHooks;
 }
 
 // ── Callbacks for UI updates ──
@@ -251,6 +256,7 @@ export class PipelineExecutor {
         // Delegate spawn_agent calls to the executor for message collection
         parallelSpawn: (tasks) => this.spawnAgentsCollected(tasks),
       },
+      this.config.agentLoopHooks,
     );
 
     // Load conversation history for multi-turn continuity:
@@ -486,6 +492,7 @@ export class PipelineExecutor {
             },
         parallelSpawn: (tasks) => this.spawnAgentsCollected(tasks),
       },
+      this.config.agentLoopHooks,
     );
 
     if (branchId) {

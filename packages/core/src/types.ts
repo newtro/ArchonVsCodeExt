@@ -291,7 +291,11 @@ export type ExtensionMessage =
   | { type: 'providerStatus'; providerId: string; available: boolean; error?: string }
   | { type: 'claudeCliStatusResult'; installed: boolean; authenticated: boolean; version?: string; error?: string }
   // Context meter
-  | { type: 'contextMeterUpdate'; data: ContextMeterData | null };
+  | { type: 'contextMeterUpdate'; data: ContextMeterData | null }
+  // Hooks
+  | { type: 'hookConfigLoaded'; config: { chains: import('./hooks/types').HookChain[]; templates: import('./hooks/types').HookTemplate[]; variables: import('./hooks/types').VariableDefinition[]; enabled: boolean } }
+  | { type: 'hookDebug'; event: import('./hooks/types').HookExecutionEvent }
+  | { type: 'hookVariables'; variables: Record<string, unknown> };
 
 export interface ProviderInfo {
   id: string;
@@ -373,7 +377,13 @@ export type WebviewMessage =
   | { type: 'setMcpConfigPath'; path: string }
   // Context meter
   | { type: 'compressContext' }
-  | { type: 'resetContext' };
+  | { type: 'resetContext' }
+  // Hooks
+  | { type: 'loadHooks' }
+  | { type: 'saveHookConfig'; chains: import('./hooks/types').HookChain[]; variables: import('./hooks/types').VariableDefinition[]; enabled: boolean }
+  | { type: 'setHooksEnabled'; enabled: boolean }
+  | { type: 'exportHookConfig' }
+  | { type: 'importHookConfig' };
 
 export interface ContextMeterData {
   totalTokens: number;

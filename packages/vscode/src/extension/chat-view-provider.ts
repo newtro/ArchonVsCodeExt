@@ -23,7 +23,11 @@ import {
   ClaudeCliProvider,
   ProviderManager,
   detectClaudeCli,
+  HookEngine,
+  createHookBridge,
+  getHookTemplates,
 } from '@archon/core';
+import type { HookConfiguration, HookChain, HookTemplate } from '@archon/core';
 import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput, ProviderId, ProviderInfo } from '@archon/core';
 import {
   MemoryDatabase, CodebaseIndexer, ApiEmbeddingProvider,
@@ -113,6 +117,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private skillVersionManager = new SkillVersionManager();
   private currentTodoList: TodoList | null = null;
   private todoStatusBarItem: vscode.StatusBarItem;
+  private hookEngine: HookEngine;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -135,6 +140,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
     this.gitCheckpoint = new GitCheckpoint(workspaceRoot);
+
+    // Initialize hook engine
+    this.hookEngine = new HookEngine({
+      workspaceRoot,
+      onDebugEvent: (event) => {
+        this.postMessage({ type: 'hookDebug', event });
+      },
+      onVariableUpdate: (variables) => {
+        this.postMessage({ type: 'hookVariables', variables });
+      },
+    });
+
+    // Load saved hook configuration
+    this.loadHookConfig();
 
     // Initialize pipeline storage
     this.pipelineStorage = new PipelineStorage({
@@ -692,6 +711,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.sendContextMeterUpdate();
         }
         break;
+
+      // Hook messages
+      case 'loadHooks':
+        this.sendHookConfig();
+        break;
+
+      case 'saveHookConfig': {
+        const hookMsg = msg as WebviewMessage & { chains: HookChain[]; variables: import('@archon/core').VariableDefinition[]; enabled: boolean };
+        this.hookEngine.loadConfiguration({
+          version: 1,
+          variables: hookMsg.variables ?? [],
+          chains: hookMsg.chains,
+          compositionBlocks: [],
+        });
+        this.hookEngine.setEnabled(hookMsg.enabled);
+        this.saveHookConfig(hookMsg.chains, hookMsg.variables ?? [], hookMsg.enabled);
+        break;
+      }
+
+      case 'setHooksEnabled': {
+        const enableMsg = msg as WebviewMessage & { enabled: boolean };
+        this.hookEngine.setEnabled(enableMsg.enabled);
+        this.context.globalState.update('archon.hooksEnabled', enableMsg.enabled);
+        break;
+      }
+
+      case 'exportHookConfig':
+        this.exportHookConfig();
+        break;
+
+      case 'importHookConfig':
+        this.importHookConfig();
+        break;
     }
   }
 
@@ -714,6 +766,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         breakdown: health.breakdown,
       },
     });
+  }
+
+  // ── Hook Configuration Persistence ──
+
+  private sendHookConfig(): void {
+    const config = this.hookEngine.getConfiguration();
+    this.postMessage({
+      type: 'hookConfigLoaded',
+      config: {
+        chains: config.chains,
+        templates: getHookTemplates(),
+        variables: config.variables,
+        enabled: this.hookEngine.isEnabled(),
+      },
+    });
+  }
+
+  private loadHookConfig(): void {
+    const saved = this.context.globalState.get<{ chains: HookChain[]; variables?: import('@archon/core').VariableDefinition[]; enabled: boolean }>('archon.hookConfig');
+    if (saved) {
+      this.hookEngine.loadConfiguration({
+        version: 1,
+        variables: saved.variables ?? [],
+        chains: saved.chains,
+        compositionBlocks: [],
+      });
+      this.hookEngine.setEnabled(saved.enabled ?? true);
+    }
+  }
+
+  private saveHookConfig(chains: HookChain[], variables: import('@archon/core').VariableDefinition[], enabled: boolean): void {
+    this.context.globalState.update('archon.hookConfig', { chains, variables, enabled });
+  }
+
+  private async exportHookConfig(): Promise<void> {
+    const config = this.hookEngine.getConfiguration();
+    const uri = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file('.archon/hooks.json'),
+      filters: { 'JSON': ['json'] },
+    });
+    if (uri) {
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(JSON.stringify(config, null, 2)));
+      vscode.window.showInformationMessage('Hook configuration exported.');
+    }
+  }
+
+  private async importHookConfig(): Promise<void> {
+    const uris = await vscode.window.showOpenDialog({
+      filters: { 'JSON': ['json'] },
+      canSelectMany: false,
+    });
+    if (uris && uris.length > 0) {
+      try {
+        const content = Buffer.from(await vscode.workspace.fs.readFile(uris[0])).toString('utf-8');
+        const config: HookConfiguration = JSON.parse(content);
+        this.hookEngine.loadConfiguration(config);
+        this.saveHookConfig(config.chains, config.variables ?? [], true);
+        this.sendHookConfig();
+        vscode.window.showInformationMessage('Hook configuration imported.');
+      } catch (err) {
+        vscode.window.showErrorMessage(`Failed to import hooks: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   private async handlePickFile(): Promise<void> {
@@ -1359,6 +1474,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         securityLevel: this.context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict',
         workspaceRoot,
         attachments: resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
+        agentLoopHooks: createHookBridge(this.hookEngine),
       },
       {
         onToken: (token: StreamToken, branchId?: string) => this.postMessage({ type: 'streamToken', token, branchId }),
