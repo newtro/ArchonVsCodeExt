@@ -16,7 +16,7 @@ import { ChatHistoryDropdown } from './components/ChatHistoryDropdown';
 import { ParallelBranchGroup } from './components/ParallelBranchGroup';
 import { TodoListWidget } from './components/TodoListWidget';
 import { PlusIcon, ClipboardIcon, RefreshIcon } from './components/Icons';
-import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary, ProviderInfo } from '@archon/core';
+import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary, ProviderInfo, ContextMeterData } from '@archon/core';
 
 type Tab = 'chat' | 'pipeline' | 'skills' | 'network' | 'benchmarks' | 'settings';
 
@@ -92,6 +92,9 @@ export function App() {
     chunkCount?: number;
     error?: string;
   }>({ state: 'idle' });
+
+  // Context meter state
+  const [contextMeter, setContextMeter] = useState<ContextMeterData | null>(null);
 
   // Todo display mode
   const [todoDisplayMode, setTodoDisplayMode] = useState<'pinned' | 'inline' | 'floating'>('pinned');
@@ -418,6 +421,10 @@ export function App() {
 
         case 'todosTurnComplete':
           completeTodoTurn(msg.summary);
+          break;
+
+        case 'contextMeterUpdate':
+          setContextMeter(msg.data);
           break;
       }
     });
@@ -919,6 +926,9 @@ export function App() {
             activeProviderId={activeProviderId}
             onProviderChange={handleProviderChange}
             skills={skillsList.filter(s => s.enabled).map(s => ({ name: s.name, description: s.description }))}
+            contextMeter={contextMeter}
+            onContextCompress={() => postMessage({ type: 'compressContext' })}
+            onContextReset={() => postMessage({ type: 'resetContext' })}
           />
         </>
       )}

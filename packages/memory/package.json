@@ -12,10 +12,15 @@
     "test": "echo 'no tests yet'"
   },
   "dependencies": {
-    "@archon/core": "workspace:*"
+    "@archon/core": "workspace:*",
+    "better-sqlite3": "^12.6.2",
+    "sqlite-vec": "0.1.7-alpha.2",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.26.6"
   },
   "devDependencies": {
-    "typescript": "^5.8.0",
-    "@types/node": "^22.0.0"
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
   }
 }

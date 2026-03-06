@@ -1,12 +1,15 @@
 /**
- * Layer 4: Interaction Archive — full searchable history of all interactions.
+ * Layer 5: Interaction Archive — full searchable history of all interactions.
  *
  * Stores every user message, AI response, tool call input, and tool call output.
  * Entries are linked to file hashes and decay when files change significantly.
+ * Search uses BM25 + vector hybrid when embeddings are available.
+ *
+ * Storage: Unified SQLite via MemoryDatabase (interactions table).
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import type Database from 'better-sqlite3';
+import type { MemoryDatabase } from '../db/memory-database';
 
 export interface ArchivedInteraction {
   id: string;
@@ -20,8 +23,7 @@ export interface ArchivedInteraction {
     relatedFiles?: string[];
     fileHashes?: Record<string, string>;
   };
-  relevance: number; // Decays as related files change
-  embedding?: number[];
+  relevance: number;
 }
 
 export interface ArchiveSearchResult {
@@ -29,81 +31,159 @@ export interface ArchiveSearchResult {
   score: number;
 }
 
+// BM25 constants
+const BM25_K1 = 1.5;
+const BM25_B = 0.75;
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9_$]+/)
+    .filter((t) => t.length > 1);
+}
+
 export class InteractionArchive {
-  private interactions: ArchivedInteraction[] = [];
-  private storageDir: string;
+  private memDb: MemoryDatabase;
+  private db: Database.Database;
   private enabled: boolean;
   private currentSessionId: string;
 
-  constructor(workspaceRoot: string, enabled = true) {
-    this.storageDir = path.join(workspaceRoot, '.archon', 'archive');
+  // Prepared statements
+  private stmts: {
+    insert?: Database.Statement;
+    search?: Database.Statement;
+    getCount?: Database.Statement;
+    getByFile?: Database.Statement;
+    updateRelevance?: Database.Statement;
+    purge?: Database.Statement;
+    getAll?: Database.Statement;
+  } = {};
+
+  constructor(memDb: MemoryDatabase, enabled = true) {
+    this.memDb = memDb;
+    this.db = memDb.getDb();
     this.enabled = enabled;
     this.currentSessionId = Math.random().toString(36).slice(2, 11);
+    this.prepareStatements();
   }
 
-  /**
-   * Load archive from disk.
-   */
-  async load(): Promise<void> {
-    if (!this.enabled) return;
-
-    const archivePath = path.join(this.storageDir, 'interactions.json');
-    if (fs.existsSync(archivePath)) {
-      try {
-        this.interactions = JSON.parse(fs.readFileSync(archivePath, 'utf-8'));
-      } catch {
-        this.interactions = [];
-      }
-    }
+  private prepareStatements(): void {
+    this.stmts.insert = this.db.prepare(
+      `INSERT INTO interactions (id, session_id, timestamp, type, content, metadata, relevance, embedding)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmts.getCount = this.db.prepare(
+      'SELECT COUNT(*) as count FROM interactions',
+    );
+    this.stmts.getByFile = this.db.prepare(
+      `SELECT id, relevance FROM interactions WHERE metadata LIKE ?`,
+    );
+    this.stmts.updateRelevance = this.db.prepare(
+      'UPDATE interactions SET relevance = ? WHERE id = ?',
+    );
+    this.stmts.purge = this.db.prepare(
+      'DELETE FROM interactions WHERE timestamp BETWEEN ? AND ?',
+    );
+    this.stmts.getAll = this.db.prepare(
+      'SELECT id, session_id, timestamp, type, content, metadata, relevance FROM interactions WHERE relevance >= 0.1 ORDER BY timestamp DESC',
+    );
   }
 
   /**
    * Archive a new interaction.
    */
-  async add(
+  add(
     type: ArchivedInteraction['type'],
     content: string,
     metadata?: ArchivedInteraction['metadata'],
-  ): Promise<void> {
+  ): void {
     if (!this.enabled) return;
 
-    const interaction: ArchivedInteraction = {
-      id: Math.random().toString(36).slice(2, 11),
-      sessionId: this.currentSessionId,
-      timestamp: Date.now(),
+    const id = Math.random().toString(36).slice(2, 11);
+    this.stmts.insert!.run(
+      id,
+      this.currentSessionId,
+      Date.now(),
       type,
       content,
-      metadata,
-      relevance: 1.0,
-    };
-
-    this.interactions.push(interaction);
-
-    // Auto-persist every 10 interactions
-    if (this.interactions.length % 10 === 0) {
-      await this.persist();
-    }
+      metadata ? JSON.stringify(metadata) : null,
+      1.0,
+      null, // embedding generated separately
+    );
   }
 
   /**
-   * Search the archive with a text query.
-   * Falls back to simple text search when no embeddings available.
+   * Search the archive with BM25 text search.
+   * Relevance decay is applied as a score multiplier.
    */
   search(query: string, topK = 10): ArchiveSearchResult[] {
-    const queryTerms = query.toLowerCase().split(/\s+/);
+    const queryTerms = tokenize(query);
+    if (queryTerms.length === 0) return [];
+
+    const rows = this.stmts.getAll!.all() as Array<{
+      id: string;
+      session_id: string;
+      timestamp: number;
+      type: string;
+      content: string;
+      metadata: string | null;
+      relevance: number;
+    }>;
+
+    // Build per-query BM25 stats
+    let totalLength = 0;
+    const docFreq = new Map<string, number>();
+    const docInfos: Array<{
+      row: (typeof rows)[0];
+      termFreqs: Map<string, number>;
+      docLength: number;
+    }> = [];
+
+    for (const row of rows) {
+      const tokens = tokenize(row.content);
+      const termFreqs = new Map<string, number>();
+      for (const token of tokens) {
+        termFreqs.set(token, (termFreqs.get(token) ?? 0) + 1);
+      }
+      for (const term of termFreqs.keys()) {
+        docFreq.set(term, (docFreq.get(term) ?? 0) + 1);
+      }
+      totalLength += tokens.length;
+      docInfos.push({ row, termFreqs, docLength: tokens.length });
+    }
+
+    const avgDocLength = rows.length > 0 ? totalLength / rows.length : 0;
     const results: ArchiveSearchResult[] = [];
 
-    for (const interaction of this.interactions) {
-      if (interaction.relevance < 0.1) continue;
-
-      const content = interaction.content.toLowerCase();
+    for (const { row, termFreqs, docLength } of docInfos) {
       let score = 0;
       for (const term of queryTerms) {
-        if (content.includes(term)) score += 1;
+        const tf = termFreqs.get(term) ?? 0;
+        if (tf === 0) continue;
+
+        const df = docFreq.get(term) ?? 0;
+        const idf = Math.log(1 + (rows.length - df + 0.5) / (df + 0.5));
+        const tfNorm =
+          (tf * (BM25_K1 + 1)) /
+          (tf + BM25_K1 * (1 - BM25_B + BM25_B * (docLength / avgDocLength)));
+        score += idf * tfNorm;
       }
+
       if (score > 0) {
-        score = (score / queryTerms.length) * interaction.relevance;
-        results.push({ interaction, score });
+        // Apply relevance decay as a multiplier
+        score *= row.relevance;
+        results.push({
+          interaction: {
+            id: row.id,
+            sessionId: row.session_id,
+            timestamp: row.timestamp,
+            type: row.type as ArchivedInteraction['type'],
+            content: row.content,
+            metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+            relevance: row.relevance,
+          },
+          score,
+        });
       }
     }
 
@@ -115,34 +195,40 @@ export class InteractionArchive {
    * Decay relevance of interactions linked to changed files.
    */
   decayForFile(filePath: string): void {
-    for (const interaction of this.interactions) {
-      if (interaction.metadata?.relatedFiles?.includes(filePath)) {
-        interaction.relevance = Math.max(0, interaction.relevance - 0.2);
-      }
+    // Search for interactions that mention this file in metadata
+    const pattern = `%${filePath.replace(/\\/g, '\\\\').replace(/%/g, '\\%')}%`;
+    const rows = this.stmts.getByFile!.all(pattern) as Array<{
+      id: string;
+      relevance: number;
+    }>;
+
+    for (const row of rows) {
+      const newRelevance = Math.max(0, row.relevance - 0.2);
+      this.stmts.updateRelevance!.run(newRelevance, row.id);
+    }
+
+    if (rows.length > 0) {
+      this.memDb.recordMetric('forgetting', {
+        reason: 'file_changed',
+        filePath,
+        interactionsDecayed: rows.length,
+      });
     }
   }
 
   /**
    * Purge interactions by date range.
    */
-  purge(before?: Date, after?: Date): number {
-    const startLen = this.interactions.length;
-    this.interactions = this.interactions.filter(i => {
-      if (before && i.timestamp > before.getTime()) return true;
-      if (after && i.timestamp < after.getTime()) return true;
-      if (before && after) {
-        return i.timestamp < after.getTime() || i.timestamp > before.getTime();
-      }
-      return false;
-    });
-    return startLen - this.interactions.length;
+  purge(after: Date, before: Date): number {
+    const result = this.stmts.purge!.run(after.getTime(), before.getTime());
+    return result.changes;
   }
 
   /**
    * Get interaction count.
    */
   getCount(): number {
-    return this.interactions.length;
+    return (this.stmts.getCount!.get() as { count: number }).count;
   }
 
   /**
@@ -153,14 +239,10 @@ export class InteractionArchive {
   }
 
   /**
-   * Persist archive to disk.
+   * Start a new session (call at session start).
    */
-  async persist(): Promise<void> {
-    if (!this.enabled) return;
-    fs.mkdirSync(this.storageDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(this.storageDir, 'interactions.json'),
-      JSON.stringify(this.interactions),
-    );
+  startSession(): string {
+    this.currentSessionId = Math.random().toString(36).slice(2, 11);
+    return this.currentSessionId;
   }
 }

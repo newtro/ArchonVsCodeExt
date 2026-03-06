@@ -1,15 +1,20 @@
 /**
- * Layer 2: Codebase RAG — incremental code indexer with BM25 + vector search.
+ * Layer 3: Codebase RAG — incremental code indexer with BM25 + vector search.
  *
  * Search strategy:
  * - BM25 (always available): term-frequency based ranking, zero dependencies
- * - Vector search (when embeddings available): cosine similarity on persisted embeddings
- * - Hybrid mode: combines both scores when embeddings exist
+ * - Vector search (when embeddings available): cosine similarity on SQLite-stored embeddings
+ * - Hybrid mode: combines both scores via Reciprocal Rank Fusion when embeddings exist
+ *
+ * Storage: Unified SQLite via MemoryDatabase (chunks + file_hashes tables).
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import type Database from 'better-sqlite3';
+import type { MemoryDatabase } from '../db/memory-database';
+import { ASTChunker } from './ast-chunker';
 
 export interface CodeChunk {
   id: string;
@@ -19,6 +24,7 @@ export interface CodeChunk {
   content: string;
   language: string;
   hash: string;
+  symbolId?: number;
   embedding?: number[];
 }
 
@@ -56,7 +62,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
       if (!res.ok) throw new Error(`Ollama embedding failed: ${res.status}`);
 
-      const data = await res.json() as { embedding: number[] };
+      const data = (await res.json()) as { embedding: number[] };
       results.push(data.embedding);
     }
     return results;
@@ -72,7 +78,11 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
   private baseUrl: string;
   private model: string;
 
-  constructor(apiKey: string, baseUrl = 'https://openrouter.ai/api/v1', model = 'openai/text-embedding-3-small') {
+  constructor(
+    apiKey: string,
+    baseUrl = 'https://openrouter.ai/api/v1',
+    model = 'openai/text-embedding-3-small',
+  ) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.model = model;
@@ -83,15 +93,15 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({ model: this.model, input: texts }),
     });
 
     if (!res.ok) throw new Error(`Embedding API failed: ${res.status}`);
 
-    const data = await res.json() as { data: Array<{ embedding: number[] }> };
-    return data.data.map(d => d.embedding);
+    const data = (await res.json()) as { data: Array<{ embedding: number[] }> };
+    return data.data.map((d) => d.embedding);
   }
 }
 
@@ -100,54 +110,60 @@ export class ApiEmbeddingProvider implements EmbeddingProvider {
 interface BM25Stats {
   avgDocLength: number;
   docCount: number;
-  /** Maps term → number of documents containing that term */
   docFreq: Map<string, number>;
-  /** Maps chunk ID → { termFreqs, docLength } */
   docStats: Map<string, { termFreqs: Map<string, number>; docLength: number }>;
 }
 
 const BM25_K1 = 1.5;
 const BM25_B = 0.75;
+const RRF_K = 60; // Reciprocal Rank Fusion constant
 
 function tokenize(text: string): string[] {
-  return text.toLowerCase().split(/[^a-z0-9_$]+/).filter(t => t.length > 1);
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9_$]+/)
+    .filter((t) => t.length > 1);
 }
 
-function buildBM25Stats(chunks: Map<string, CodeChunk>): BM25Stats {
+function buildBM25Stats(chunks: CodeChunk[]): BM25Stats {
   const docFreq = new Map<string, number>();
   const docStats = new Map<string, { termFreqs: Map<string, number>; docLength: number }>();
   let totalLength = 0;
 
-  for (const [id, chunk] of chunks) {
+  for (const chunk of chunks) {
     const tokens = tokenize(chunk.content);
     const termFreqs = new Map<string, number>();
     for (const token of tokens) {
       termFreqs.set(token, (termFreqs.get(token) ?? 0) + 1);
     }
-    // Count unique terms for IDF
     for (const term of termFreqs.keys()) {
       docFreq.set(term, (docFreq.get(term) ?? 0) + 1);
     }
-    docStats.set(id, { termFreqs, docLength: tokens.length });
+    docStats.set(chunk.id, { termFreqs, docLength: tokens.length });
     totalLength += tokens.length;
   }
 
   return {
-    avgDocLength: chunks.size > 0 ? totalLength / chunks.size : 0,
-    docCount: chunks.size,
+    avgDocLength: chunks.length > 0 ? totalLength / chunks.length : 0,
+    docCount: chunks.length,
     docFreq,
     docStats,
   };
 }
 
-function bm25Search(query: string, chunks: Map<string, CodeChunk>, stats: BM25Stats, topK: number): SearchResult[] {
+function bm25Search(
+  query: string,
+  chunks: CodeChunk[],
+  stats: BM25Stats,
+  topK: number,
+): SearchResult[] {
   const queryTerms = tokenize(query);
   if (queryTerms.length === 0) return [];
 
   const results: SearchResult[] = [];
 
-  for (const [id, chunk] of chunks) {
-    const doc = stats.docStats.get(id);
+  for (const chunk of chunks) {
+    const doc = stats.docStats.get(chunk.id);
     if (!doc) continue;
 
     let score = 0;
@@ -157,7 +173,9 @@ function bm25Search(query: string, chunks: Map<string, CodeChunk>, stats: BM25St
 
       const df = stats.docFreq.get(term) ?? 0;
       const idf = Math.log(1 + (stats.docCount - df + 0.5) / (df + 0.5));
-      const tfNorm = (tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * doc.docLength / stats.avgDocLength));
+      const tfNorm =
+        (tf * (BM25_K1 + 1)) /
+        (tf + BM25_K1 * (1 - BM25_B + BM25_B * (doc.docLength / stats.avgDocLength)));
       score += idf * tfNorm;
     }
 
@@ -174,16 +192,30 @@ function bm25Search(query: string, chunks: Map<string, CodeChunk>, stats: BM25St
 
 /**
  * Codebase indexer — chunks code files, manages embeddings, and provides
- * hybrid BM25 + vector search.
+ * hybrid BM25 + vector search. Backed by SQLite via MemoryDatabase.
  */
 export class CodebaseIndexer {
   private workspaceRoot: string;
-  private indexDir: string;
-  private chunks: Map<string, CodeChunk> = new Map();
+  private memDb: MemoryDatabase;
+  private db: Database.Database;
   private embeddingProvider: EmbeddingProvider | null = null;
-  private fileHashes: Map<string, string> = new Map();
+  private astChunker: ASTChunker = new ASTChunker();
+
+  // In-memory BM25 index (rebuilt from SQLite on load)
+  private bm25Chunks: CodeChunk[] = [];
   private bm25Stats: BM25Stats | null = null;
-  private embeddingDimensions = 0;
+
+  // Prepared statements (lazy-initialized)
+  private stmts: {
+    upsertFileHash?: Database.Statement;
+    getFileHash?: Database.Statement;
+    deleteChunksForFile?: Database.Statement;
+    insertChunk?: Database.Statement;
+    getAllChunks?: Database.Statement;
+    getChunksWithEmbeddings?: Database.Statement;
+    updateChunkEmbedding?: Database.Statement;
+    getChunkCount?: Database.Statement;
+  } = {};
 
   // Patterns to ignore
   private ignorePatterns = [
@@ -195,7 +227,6 @@ export class CodebaseIndexer {
     '.augment', '.auto-claude', '.kilocode', '.serena', '.trae', '.playwright-mcp',
   ];
 
-  // Max file size to index (skip large generated files)
   private maxFileSize = 100 * 1024; // 100KB
 
   private supportedExtensions = new Set([
@@ -206,9 +237,39 @@ export class CodebaseIndexer {
     '.css', '.scss', '.less', '.html', '.razor',
   ]);
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, memDb: MemoryDatabase) {
     this.workspaceRoot = workspaceRoot;
-    this.indexDir = path.join(workspaceRoot, '.archon', 'index');
+    this.memDb = memDb;
+    this.db = memDb.getDb();
+    this.prepareStatements();
+  }
+
+  private prepareStatements(): void {
+    this.stmts.upsertFileHash = this.db.prepare(
+      'INSERT OR REPLACE INTO file_hashes (file_path, hash, last_indexed) VALUES (?, ?, ?)',
+    );
+    this.stmts.getFileHash = this.db.prepare(
+      'SELECT hash FROM file_hashes WHERE file_path = ?',
+    );
+    this.stmts.deleteChunksForFile = this.db.prepare(
+      'DELETE FROM chunks WHERE file_path = ?',
+    );
+    this.stmts.insertChunk = this.db.prepare(
+      `INSERT OR REPLACE INTO chunks (id, file_path, start_line, end_line, content, language, content_hash, symbol_id, embedding)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmts.getAllChunks = this.db.prepare(
+      'SELECT id, file_path, start_line, end_line, content, language, content_hash FROM chunks',
+    );
+    this.stmts.getChunksWithEmbeddings = this.db.prepare(
+      'SELECT id, file_path, start_line, end_line, content, language, content_hash, embedding FROM chunks WHERE embedding IS NOT NULL',
+    );
+    this.stmts.updateChunkEmbedding = this.db.prepare(
+      'UPDATE chunks SET embedding = ? WHERE id = ?',
+    );
+    this.stmts.getChunkCount = this.db.prepare(
+      'SELECT COUNT(*) as count FROM chunks',
+    );
   }
 
   setEmbeddingProvider(provider: EmbeddingProvider): void {
@@ -216,8 +277,8 @@ export class CodebaseIndexer {
   }
 
   /**
-   * Full index of the workspace with parallel file processing.
-   * Phase 1: Chunk all files (fast, local I/O only).
+   * Full index of the workspace.
+   * Phase 1: Chunk all files (fast, local I/O only) → SQLite.
    * Phase 2: Generate embeddings for new chunks (optional, API calls).
    */
   async indexWorkspace(
@@ -227,41 +288,48 @@ export class CodebaseIndexer {
     let indexed = 0;
     const concurrency = 20;
 
-    // Phase 1: Chunk files (no embedding calls — fast)
+    // Phase 1: Chunk files into SQLite
     for (let i = 0; i < files.length; i += concurrency) {
       const batch = files.slice(i, i + concurrency);
-      const results = await Promise.all(batch.map(f => this.indexFile(f)));
+      const results = await Promise.all(batch.map((f) => this.indexFile(f)));
       indexed += results.filter(Boolean).length;
       onProgress?.(Math.min(i + concurrency, files.length), files.length, 'chunking');
     }
 
-    // Rebuild BM25 stats — search is usable now even without embeddings
-    this.bm25Stats = buildBM25Stats(this.chunks);
+    // Rebuild BM25 in-memory index from SQLite
+    this.rebuildBM25Index();
 
-    // Phase 2: Generate embeddings for chunks that don't have them yet
+    // Phase 2: Generate embeddings for chunks without them
     if (this.embeddingProvider) {
-      const chunksNeedingEmbeddings = Array.from(this.chunks.values()).filter(c => !c.embedding);
+      const chunksNeedingEmbeddings = this.db
+        .prepare('SELECT id, content FROM chunks WHERE embedding IS NULL')
+        .all() as Array<{ id: string; content: string }>;
+
       if (chunksNeedingEmbeddings.length > 0) {
         const embBatchSize = 20;
         let embedded = 0;
         for (let i = 0; i < chunksNeedingEmbeddings.length; i += embBatchSize) {
           const batch = chunksNeedingEmbeddings.slice(i, i + embBatchSize);
           try {
-            const embeddings = await this.embeddingProvider.embed(batch.map(c => c.content));
-            for (let j = 0; j < embeddings.length; j++) {
-              batch[j].embedding = embeddings[j];
-            }
+            const embeddings = await this.embeddingProvider.embed(
+              batch.map((c) => c.content),
+            );
+            this.memDb.transaction(() => {
+              for (let j = 0; j < embeddings.length; j++) {
+                const buf = Buffer.from(new Float32Array(embeddings[j]).buffer);
+                this.stmts.updateChunkEmbedding!.run(buf, batch[j].id);
+              }
+            });
             embedded += batch.length;
           } catch {
-            // Embedding API failed for this batch — skip, BM25 still works
-            break;
+            break; // Embedding API failed — BM25 still works
           }
           onProgress?.(embedded, chunksNeedingEmbeddings.length, 'embedding');
         }
       }
     }
 
-    await this.saveIndex();
+    this.memDb.recordMetric('indexing', { filesIndexed: indexed, totalFiles: files.length });
     return indexed;
   }
 
@@ -271,28 +339,32 @@ export class CodebaseIndexer {
   async reindexFile(filePath: string): Promise<boolean> {
     const changed = await this.indexFile(filePath);
     if (changed) {
-      this.bm25Stats = buildBM25Stats(this.chunks);
-      await this.saveIndex();
+      this.rebuildBM25Index();
     }
     return changed;
   }
 
   /**
    * Search the index using hybrid BM25 + vector search.
-   * When embeddings are available, combines scores (0.4 BM25 + 0.6 vector).
-   * Falls back to BM25-only when no embeddings.
+   * Uses Reciprocal Rank Fusion (RRF) to combine results when embeddings are available.
+   * Falls back to BM25-only when no embeddings exist.
    */
   async search(query: string, topK = 10): Promise<SearchResult[]> {
-    // Ensure BM25 stats are built
     if (!this.bm25Stats) {
-      this.bm25Stats = buildBM25Stats(this.chunks);
+      this.rebuildBM25Index();
     }
 
     // BM25 search (always available)
-    const bm25Results = bm25Search(query, this.chunks, this.bm25Stats, topK * 3);
+    const bm25Results = bm25Search(query, this.bm25Chunks, this.bm25Stats!, topK * 3);
 
-    // Check if we have embeddings available for vector search
-    const hasEmbeddings = this.embeddingProvider && this.hasAnyEmbeddings();
+    // Check if we have embeddings for vector search
+    const hasEmbeddings =
+      this.embeddingProvider &&
+      (
+        this.db.prepare('SELECT 1 FROM chunks WHERE embedding IS NOT NULL LIMIT 1').get() as
+          | unknown
+          | undefined
+      ) !== undefined;
 
     if (!hasEmbeddings) {
       return bm25Results.slice(0, topK);
@@ -304,35 +376,57 @@ export class CodebaseIndexer {
       const [queryEmbedding] = await this.embeddingProvider!.embed([query]);
       vectorResults = this.vectorSearch(queryEmbedding, topK * 3);
     } catch {
-      // If embedding query fails, fall back to BM25 only
       return bm25Results.slice(0, topK);
     }
 
-    // Hybrid merge: normalize scores and combine
-    return this.mergeResults(bm25Results, vectorResults, topK);
+    // Reciprocal Rank Fusion
+    return this.rrfMerge(bm25Results, vectorResults, topK);
+  }
+
+  /**
+   * Load existing index from SQLite into the BM25 in-memory index.
+   * Call this on startup to make search available immediately.
+   */
+  loadIndex(): boolean {
+    const count = (this.stmts.getChunkCount!.get() as { count: number }).count;
+    if (count === 0) return false;
+
+    this.rebuildBM25Index();
+    return true;
   }
 
   /**
    * Generate a compressed repo map (function/class signatures).
    */
   generateRepoMap(): string {
-    const fileMap = new Map<string, CodeChunk[]>();
-    for (const chunk of this.chunks.values()) {
-      const existing = fileMap.get(chunk.filePath) ?? [];
-      existing.push(chunk);
-      fileMap.set(chunk.filePath, existing);
+    const rows = this.db
+      .prepare(
+        'SELECT file_path, content FROM chunks ORDER BY file_path, start_line',
+      )
+      .all() as Array<{ file_path: string; content: string }>;
+
+    const fileMap = new Map<string, string[]>();
+    for (const row of rows) {
+      const existing = fileMap.get(row.file_path) ?? [];
+      const firstMeaningfulLine = row.content
+        .split('\n')
+        .find((l: string) =>
+          /^(export |public |private |protected |function |class |interface |type |const |let |var |def |fn |func |async )/.test(
+            l.trim(),
+          ),
+        );
+      if (firstMeaningfulLine) {
+        existing.push(firstMeaningfulLine.trim());
+      }
+      fileMap.set(row.file_path, existing);
     }
 
     const lines: string[] = ['# Repository Map\n'];
-    for (const [filePath, chunks] of fileMap) {
+    for (const [filePath, signatures] of fileMap) {
       const relPath = path.relative(this.workspaceRoot, filePath);
       lines.push(`## ${relPath}`);
-      for (const chunk of chunks) {
-        const firstMeaningfulLine = chunk.content.split('\n')
-          .find(l => /^(export |public |private |protected |function |class |interface |type |const |let |var |def |fn |func |async )/.test(l.trim()));
-        if (firstMeaningfulLine) {
-          lines.push(`  ${firstMeaningfulLine.trim()}`);
-        }
+      for (const sig of signatures) {
+        lines.push(`  ${sig}`);
       }
       lines.push('');
     }
@@ -341,64 +435,15 @@ export class CodebaseIndexer {
   }
 
   getChunkCount(): number {
-    return this.chunks.size;
+    return (this.stmts.getChunkCount!.get() as { count: number }).count;
   }
 
-  private hasAnyEmbeddings(): boolean {
-    for (const chunk of this.chunks.values()) {
-      if (chunk.embedding) return true;
-    }
-    return false;
-  }
-
-  private vectorSearch(queryEmbedding: number[], topK: number): SearchResult[] {
-    const results: SearchResult[] = [];
-    for (const chunk of this.chunks.values()) {
-      if (!chunk.embedding) continue;
-      const score = cosineSimilarity(queryEmbedding, chunk.embedding);
-      results.push({ chunk, score });
-    }
-    results.sort((a, b) => b.score - a.score);
-    return results.slice(0, topK);
-  }
-
-  private mergeResults(bm25Results: SearchResult[], vectorResults: SearchResult[], topK: number): SearchResult[] {
-    // Normalize each result set to 0-1 range
-    const normBM25 = this.normalizeScores(bm25Results);
-    const normVector = this.normalizeScores(vectorResults);
-
-    // Merge into a single map by chunk ID
-    const merged = new Map<string, { chunk: CodeChunk; score: number }>();
-
-    for (const r of normBM25) {
-      merged.set(r.chunk.id, { chunk: r.chunk, score: r.score * 0.4 });
-    }
-    for (const r of normVector) {
-      const existing = merged.get(r.chunk.id);
-      if (existing) {
-        existing.score += r.score * 0.6;
-      } else {
-        merged.set(r.chunk.id, { chunk: r.chunk, score: r.score * 0.6 });
-      }
-    }
-
-    const results = Array.from(merged.values());
-    results.sort((a, b) => b.score - a.score);
-    return results.slice(0, topK);
-  }
-
-  private normalizeScores(results: SearchResult[]): SearchResult[] {
-    if (results.length === 0) return [];
-    const maxScore = results[0].score; // Already sorted descending
-    if (maxScore === 0) return results;
-    return results.map(r => ({ ...r, score: r.score / maxScore }));
-  }
+  // ── Private: Indexing ──
 
   private async indexFile(filePath: string): Promise<boolean> {
     const ext = path.extname(filePath);
     if (!this.supportedExtensions.has(ext)) return false;
 
-    // Skip files that are too large (likely generated)
     try {
       const stat = await fs.promises.stat(filePath);
       if (stat.size > this.maxFileSize) return false;
@@ -413,56 +458,140 @@ export class CodebaseIndexer {
       return false;
     }
 
-    // Check if file has changed
     const hash = crypto.createHash('md5').update(content).digest('hex');
-    if (this.fileHashes.get(filePath) === hash) return false;
-    this.fileHashes.set(filePath, hash);
+    const existingHash = this.stmts.getFileHash!.get(filePath) as
+      | { hash: string }
+      | undefined;
+    if (existingHash?.hash === hash) return false;
 
-    // Remove old chunks for this file
-    for (const [id, chunk] of this.chunks) {
-      if (chunk.filePath === filePath) this.chunks.delete(id);
-    }
-
-    // Chunk the file (embedding generation happens separately in indexWorkspace phase 2)
+    // File changed — re-chunk using AST-aware chunking
     const language = this.getLanguage(ext);
-    const newChunks = this.chunkFile(filePath, content, language);
+    const newChunks = await this.astChunker.chunkFile(filePath, content, language);
 
-    // Store chunks
-    for (const chunk of newChunks) {
-      this.chunks.set(chunk.id, chunk);
-    }
+    this.memDb.transaction(() => {
+      this.stmts.deleteChunksForFile!.run(filePath);
+      for (const chunk of newChunks) {
+        this.stmts.insertChunk!.run(
+          chunk.id,
+          chunk.filePath,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.content,
+          chunk.language,
+          chunk.hash,
+          chunk.symbolId ?? null,
+          null, // embedding generated in phase 2
+        );
+      }
+      this.stmts.upsertFileHash!.run(filePath, hash, Date.now());
+    });
 
     return true;
   }
 
-  private chunkFile(filePath: string, content: string, language: string): CodeChunk[] {
-    const lines = content.split('\n');
-    const chunks: CodeChunk[] = [];
-    const chunkSize = 50; // lines per chunk
-    const overlap = 5;
+  // ── Private: Search ──
 
-    for (let i = 0; i < lines.length; i += chunkSize - overlap) {
-      const endLine = Math.min(i + chunkSize, lines.length);
-      const chunkContent = lines.slice(i, endLine).join('\n');
+  private rebuildBM25Index(): void {
+    const rows = this.stmts.getAllChunks!.all() as Array<{
+      id: string;
+      file_path: string;
+      start_line: number;
+      end_line: number;
+      content: string;
+      language: string;
+      content_hash: string;
+    }>;
 
-      if (chunkContent.trim().length < 10) continue; // Skip near-empty chunks
+    this.bm25Chunks = rows.map((r) => ({
+      id: r.id,
+      filePath: r.file_path,
+      startLine: r.start_line,
+      endLine: r.end_line,
+      content: r.content,
+      language: r.language,
+      hash: r.content_hash,
+    }));
 
-      const id = `${filePath}:${i + 1}-${endLine}`;
-      const hash = crypto.createHash('md5').update(chunkContent).digest('hex');
+    this.bm25Stats = buildBM25Stats(this.bm25Chunks);
+  }
 
-      chunks.push({
-        id,
-        filePath,
-        startLine: i + 1,
-        endLine,
-        content: chunkContent,
-        language,
-        hash,
+  private vectorSearch(queryEmbedding: number[], topK: number): SearchResult[] {
+    const rows = this.stmts.getChunksWithEmbeddings!.all() as Array<{
+      id: string;
+      file_path: string;
+      start_line: number;
+      end_line: number;
+      content: string;
+      language: string;
+      content_hash: string;
+      embedding: Buffer;
+    }>;
+
+    const results: SearchResult[] = [];
+    for (const row of rows) {
+      const embedding = new Float32Array(
+        row.embedding.buffer,
+        row.embedding.byteOffset,
+        row.embedding.byteLength / 4,
+      );
+      const score = cosineSimilarity(queryEmbedding, Array.from(embedding));
+      results.push({
+        chunk: {
+          id: row.id,
+          filePath: row.file_path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          content: row.content,
+          language: row.language,
+          hash: row.content_hash,
+        },
+        score,
       });
     }
 
-    return chunks;
+    results.sort((a, b) => b.score - a.score);
+    return results.slice(0, topK);
   }
+
+  /**
+   * Reciprocal Rank Fusion — more robust than linear score combination.
+   * RRF_score(d) = sum( 1 / (k + rank_i(d)) ) for each ranking i
+   */
+  private rrfMerge(
+    bm25Results: SearchResult[],
+    vectorResults: SearchResult[],
+    topK: number,
+  ): SearchResult[] {
+    const scores = new Map<string, { chunk: CodeChunk; score: number }>();
+
+    for (let rank = 0; rank < bm25Results.length; rank++) {
+      const r = bm25Results[rank];
+      const existing = scores.get(r.chunk.id);
+      const rrfScore = 1 / (RRF_K + rank + 1);
+      if (existing) {
+        existing.score += rrfScore;
+      } else {
+        scores.set(r.chunk.id, { chunk: r.chunk, score: rrfScore });
+      }
+    }
+
+    for (let rank = 0; rank < vectorResults.length; rank++) {
+      const r = vectorResults[rank];
+      const existing = scores.get(r.chunk.id);
+      const rrfScore = 1 / (RRF_K + rank + 1);
+      if (existing) {
+        existing.score += rrfScore;
+      } else {
+        scores.set(r.chunk.id, { chunk: r.chunk, score: rrfScore });
+      }
+    }
+
+    const results = Array.from(scores.values());
+    results.sort((a, b) => b.score - a.score);
+    return results.slice(0, topK);
+  }
+
+  // ── Private: File Walking ──
 
   private collectFiles(dir: string): string[] {
     const files: string[] = [];
@@ -481,7 +610,7 @@ export class CodebaseIndexer {
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
 
-      if (this.ignorePatterns.some(p => entry.name === p)) continue;
+      if (this.ignorePatterns.some((p) => entry.name === p)) continue;
       if (entry.name.startsWith('.')) continue;
 
       if (entry.isDirectory()) {
@@ -507,142 +636,6 @@ export class CodebaseIndexer {
       '.scss': 'scss', '.html': 'html',
     };
     return map[ext] ?? 'text';
-  }
-
-  // ── Persistence ──
-
-  private async saveIndex(): Promise<void> {
-    fs.mkdirSync(this.indexDir, { recursive: true });
-
-    // Save file hashes
-    const hashesPath = path.join(this.indexDir, 'file-hashes.json');
-    const hashes = Object.fromEntries(this.fileHashes);
-    await fs.promises.writeFile(hashesPath, JSON.stringify(hashes));
-
-    // Save chunks metadata (without embeddings — those go in binary file)
-    const chunksPath = path.join(this.indexDir, 'chunks.json');
-    const chunksData = Array.from(this.chunks.values()).map(c => ({
-      id: c.id,
-      filePath: c.filePath,
-      startLine: c.startLine,
-      endLine: c.endLine,
-      content: c.content,
-      language: c.language,
-      hash: c.hash,
-      hasEmbedding: !!c.embedding,
-    }));
-    await fs.promises.writeFile(chunksPath, JSON.stringify(chunksData));
-
-    // Save embeddings as binary Float32Array for efficiency
-    this.saveEmbeddings();
-  }
-
-  private saveEmbeddings(): void {
-    // Collect all chunks that have embeddings
-    const embeddedChunks: Array<{ id: string; embedding: number[] }> = [];
-    let dimensions = 0;
-
-    for (const chunk of this.chunks.values()) {
-      if (chunk.embedding) {
-        embeddedChunks.push({ id: chunk.id, embedding: chunk.embedding });
-        dimensions = chunk.embedding.length;
-      }
-    }
-
-    if (embeddedChunks.length === 0) return;
-
-    // Save embedding manifest (maps chunk IDs to their index in the binary file)
-    const manifestPath = path.join(this.indexDir, 'embeddings-manifest.json');
-    const manifest = {
-      dimensions,
-      count: embeddedChunks.length,
-      chunkIds: embeddedChunks.map(c => c.id),
-    };
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-
-    // Save embedding vectors as packed Float32Array binary
-    const embeddingsPath = path.join(this.indexDir, 'embeddings.bin');
-    const buffer = Buffer.alloc(embeddedChunks.length * dimensions * 4);
-    for (let i = 0; i < embeddedChunks.length; i++) {
-      const emb = embeddedChunks[i].embedding;
-      for (let j = 0; j < dimensions; j++) {
-        buffer.writeFloatLE(emb[j], (i * dimensions + j) * 4);
-      }
-    }
-    fs.writeFileSync(embeddingsPath, buffer);
-
-    this.embeddingDimensions = dimensions;
-  }
-
-  /**
-   * Load a previously saved index including persisted embeddings.
-   */
-  async loadIndex(): Promise<boolean> {
-    const hashesPath = path.join(this.indexDir, 'file-hashes.json');
-    const chunksPath = path.join(this.indexDir, 'chunks.json');
-
-    if (!fs.existsSync(hashesPath) || !fs.existsSync(chunksPath)) return false;
-
-    try {
-      const hashes = JSON.parse(await fs.promises.readFile(hashesPath, 'utf-8')) as Record<string, string>;
-      this.fileHashes = new Map(Object.entries(hashes));
-
-      const chunksData = JSON.parse(await fs.promises.readFile(chunksPath, 'utf-8')) as Array<CodeChunk & { hasEmbedding?: boolean }>;
-      this.chunks = new Map(chunksData.map(c => [c.id, {
-        id: c.id,
-        filePath: c.filePath,
-        startLine: c.startLine,
-        endLine: c.endLine,
-        content: c.content,
-        language: c.language,
-        hash: c.hash,
-      }]));
-
-      // Load persisted embeddings
-      this.loadEmbeddings();
-
-      // Build BM25 stats from loaded chunks
-      this.bm25Stats = buildBM25Stats(this.chunks);
-
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private loadEmbeddings(): void {
-    const manifestPath = path.join(this.indexDir, 'embeddings-manifest.json');
-    const embeddingsPath = path.join(this.indexDir, 'embeddings.bin');
-
-    if (!fs.existsSync(manifestPath) || !fs.existsSync(embeddingsPath)) return;
-
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
-        dimensions: number;
-        count: number;
-        chunkIds: string[];
-      };
-
-      const buffer = fs.readFileSync(embeddingsPath);
-      const expectedSize = manifest.count * manifest.dimensions * 4;
-      if (buffer.length !== expectedSize) return;
-
-      this.embeddingDimensions = manifest.dimensions;
-
-      for (let i = 0; i < manifest.count; i++) {
-        const chunkId = manifest.chunkIds[i];
-        const chunk = this.chunks.get(chunkId);
-        if (!chunk) continue;
-
-        const embedding = new Array<number>(manifest.dimensions);
-        for (let j = 0; j < manifest.dimensions; j++) {
-          embedding[j] = buffer.readFloatLE((i * manifest.dimensions + j) * 4);
-        }
-        chunk.embedding = embedding;
-      }
-    } catch {
-      // Embeddings failed to load, search will use BM25 only
-    }
   }
 }
 

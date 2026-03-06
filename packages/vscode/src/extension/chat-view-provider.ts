@@ -25,7 +25,12 @@ import {
   detectClaudeCli,
 } from '@archon/core';
 import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput, ProviderId, ProviderInfo } from '@archon/core';
-import { CodebaseIndexer, ApiEmbeddingProvider } from '@archon/memory';
+import {
+  MemoryDatabase, CodebaseIndexer, ApiEmbeddingProvider,
+  GraphBuilder, SessionMemory, InteractionArchive,
+  ContextManager, AutoSummarizer, EditTracker, MemoryTelemetry,
+  RulesEngine, DependencyAwareness,
+} from '@archon/memory';
 import type {
   WebviewMessage,
   ExtensionMessage,
@@ -90,8 +95,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private diffViewManager: DiffViewManager;
   private gitCheckpoint: GitCheckpoint;
   private benchmarkCache: BenchmarkSource[] = [];
+  private memoryDb: MemoryDatabase | null = null;
   private indexer: CodebaseIndexer | null = null;
+  private graphBuilder: GraphBuilder | null = null;
+  private sessionMemory: SessionMemory | null = null;
+  private interactionArchive: InteractionArchive | null = null;
+  private contextManager: ContextManager | null = null;
+  private autoSummarizer: AutoSummarizer | null = null;
+  private editTracker: EditTracker | null = null;
+  private rulesEngine: RulesEngine | null = null;
+  private depAwareness: DependencyAwareness | null = null;
   private indexingInProgress = false;
+  private fileWatcher: import('vscode').FileSystemWatcher | null = null;
   private pipelineStorage: PipelineStorage;
   private skillRegistry: SkillRegistry | null = null;
   private skillExecutor: SkillExecutor | null = null;
@@ -159,9 +174,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       },
     });
 
-    // Initialize codebase indexer if we have a workspace
+    // Initialize memory system if we have a workspace
     if (workspaceRoot) {
-      this.indexer = new CodebaseIndexer(workspaceRoot);
+      this.memoryDb = new MemoryDatabase(workspaceRoot);
+      this.indexer = new CodebaseIndexer(workspaceRoot, this.memoryDb);
+      this.graphBuilder = new GraphBuilder(this.memoryDb);
+      this.sessionMemory = new SessionMemory(this.memoryDb);
+      this.interactionArchive = new InteractionArchive(this.memoryDb);
+      this.rulesEngine = new RulesEngine(workspaceRoot);
+      this.depAwareness = new DependencyAwareness(workspaceRoot);
+      this.contextManager = new ContextManager(this.memoryDb);
+      this.contextManager.setLayers({
+        rulesEngine: this.rulesEngine,
+        indexer: this.indexer,
+        sessionMemory: this.sessionMemory,
+        archive: this.interactionArchive,
+        graphBuilder: this.graphBuilder,
+        depAwareness: this.depAwareness,
+      });
+      this.autoSummarizer = new AutoSummarizer(
+        this.memoryDb, this.sessionMemory, this.interactionArchive,
+      );
+      this.editTracker = new EditTracker(this.memoryDb, this.sessionMemory);
+
+      // Run startup tasks: decay old memories, load rules, scan deps
+      this.sessionMemory.applyDecay();
+      this.rulesEngine.loadRules();
+      this.depAwareness.scan();
+
+      // File watcher: decay memories and re-index graph on save
+      this.fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx,py,rs,go,java,cs,css,html}');
+      this.fileWatcher.onDidChange((uri) => {
+        const relPath = vscode.workspace.asRelativePath(uri);
+        this.autoSummarizer?.decayForFileChange(relPath);
+      });
+      context.subscriptions.push(this.fileWatcher);
     }
 
     // Initialize skills system
@@ -216,6 +263,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this.indexer) {
       this.initializeIndexer();
     }
+
+    // Send initial context meter state
+    this.sendContextMeterUpdate();
   }
 
   private async initializeIndexer(): Promise<void> {
@@ -445,6 +495,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.claudeCliSessionId = null;
         this.cliPendingUserAnswer = null;
         this.cliAbortedForAskUser = false;
+        // Auto-summarize session before clearing
+        if (this.autoSummarizer?.isReady() && this.contextManager) {
+          const history = this.contextManager.getHistory();
+          if (history.length > 2) {
+            this.autoSummarizer.summarizeSession(history).catch(() => {});
+          }
+        }
+        this.contextManager?.clearHistory();
+        this.interactionArchive?.startSession();
+        this.sendContextMeterUpdate();
         break;
       case 'setApiKey':
         this.openRouterProvider.setApiKey(msg.key);
@@ -613,7 +673,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'setMcpConfigPath':
         this.context.globalState.update('archon.mcpConfigPath', msg.path || undefined);
         break;
+      case 'compressContext':
+        if (this.contextManager) {
+          const saved = this.contextManager.compressHistory();
+          if (saved > 0) {
+            this.sendContextMeterUpdate();
+          }
+        }
+        break;
+      case 'resetContext':
+        if (this.contextManager) {
+          // Auto-summarize before reset
+          if (this.autoSummarizer?.isReady()) {
+            const history = this.contextManager.getHistory();
+            this.autoSummarizer.summarizeSession(history).catch(() => {});
+          }
+          this.contextManager.clearHistory();
+          this.sendContextMeterUpdate();
+        }
+        break;
     }
+  }
+
+  /** Send current context meter data to the webview. */
+  private sendContextMeterUpdate(): void {
+    if (!this.contextManager) {
+      this.postMessage({ type: 'contextMeterUpdate', data: null });
+      return;
+    }
+    const health = this.contextManager.getQuickHealth();
+    this.postMessage({
+      type: 'contextMeterUpdate',
+      data: {
+        totalTokens: health.totalTokens,
+        maxTokens: health.maxTokens,
+        utilization: health.utilization,
+        healthScore: health.healthScore,
+        compressionRecommended: health.compressionRecommended,
+        resetRecommended: health.resetRecommended,
+        breakdown: health.breakdown,
+      },
+    });
   }
 
   private async handlePickFile(): Promise<void> {
@@ -1073,6 +1173,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    // Track user message in memory layers
+    if (this.contextManager) {
+      this.contextManager.addMessage('user', content);
+    }
+    if (this.interactionArchive) {
+      this.interactionArchive.add('user_message', content);
+    }
+
     // Create git checkpoint before edit batch
     await this.gitCheckpoint.createCheckpoint('pre-archon-edit');
 
@@ -1169,8 +1277,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this.updateTodoStatusBar(todos);
             }
           },
-          onToolResult: (result: ToolResult) => this.postMessage({ type: 'toolCallResult', result }),
-          onMessageComplete: (msg: ChatMessage) => this.postMessage({ type: 'messageComplete', message: msg }),
+          onToolResult: (result: ToolResult) => {
+            this.postMessage({ type: 'toolCallResult', result });
+            if (this.contextManager) {
+              this.contextManager.addMessage('tool', result.content.slice(0, 2000));
+              this.sendContextMeterUpdate();
+            }
+            if (this.interactionArchive) {
+              this.interactionArchive.add('tool_result', result.content.slice(0, 1000), {
+                toolName: result.toolCallId,
+              });
+            }
+          },
+          onMessageComplete: (msg: ChatMessage) => {
+            this.postMessage({ type: 'messageComplete', message: msg });
+            if (msg.role === 'assistant' && this.contextManager) {
+              this.contextManager.addMessage('assistant', msg.content);
+              this.sendContextMeterUpdate();
+            }
+            if (msg.role === 'assistant' && this.interactionArchive) {
+              this.interactionArchive.add('assistant_message', msg.content);
+            }
+          },
         });
         // Persist session ID for --resume on subsequent messages
         const sid = executor.getSessionId?.();
@@ -1235,8 +1363,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       {
         onToken: (token: StreamToken, branchId?: string) => this.postMessage({ type: 'streamToken', token, branchId }),
         onToolCall: (tc: ToolCall, branchId?: string) => this.postMessage({ type: 'toolCallStart', toolCall: tc, branchId }),
-        onToolResult: (result: ToolResult, branchId?: string) => this.postMessage({ type: 'toolCallResult', result, branchId }),
-        onMessageComplete: (msg: ChatMessage, branchId?: string) => this.postMessage({ type: 'messageComplete', message: msg, branchId }),
+        onToolResult: (result: ToolResult, branchId?: string) => {
+          this.postMessage({ type: 'toolCallResult', result, branchId });
+          if (this.contextManager) {
+            this.contextManager.addMessage('tool', result.content.slice(0, 2000));
+            this.sendContextMeterUpdate();
+          }
+          if (this.interactionArchive) {
+            this.interactionArchive.add('tool_result', result.content.slice(0, 1000), {
+              toolName: result.toolCallId,
+            });
+          }
+        },
+        onMessageComplete: (msg: ChatMessage, branchId?: string) => {
+          this.postMessage({ type: 'messageComplete', message: msg, branchId });
+          if (msg.role === 'assistant' && this.contextManager) {
+            this.contextManager.addMessage('assistant', msg.content);
+            this.sendContextMeterUpdate();
+          }
+          if (msg.role === 'assistant' && this.interactionArchive) {
+            this.interactionArchive.add('assistant_message', msg.content);
+          }
+        },
         onNodeStart: (node) => this.postMessage({ type: 'pipelineNodeStatus', nodeId: node.id, status: 'running' }),
         onNodeComplete: (node, result) => this.postMessage({ type: 'pipelineNodeStatus', nodeId: node.id, status: 'completed', result: result.slice(0, 200) }),
         onNodeFail: (node, error) => this.postMessage({ type: 'pipelineNodeStatus', nodeId: node.id, status: 'failed', error }),

@@ -289,7 +289,9 @@ export type ExtensionMessage =
   | { type: 'providersLoaded'; providers: ProviderInfo[] }
   | { type: 'providerChanged'; providerId: string }
   | { type: 'providerStatus'; providerId: string; available: boolean; error?: string }
-  | { type: 'claudeCliStatusResult'; installed: boolean; authenticated: boolean; version?: string; error?: string };
+  | { type: 'claudeCliStatusResult'; installed: boolean; authenticated: boolean; version?: string; error?: string }
+  // Context meter
+  | { type: 'contextMeterUpdate'; data: ContextMeterData | null };
 
 export interface ProviderInfo {
   id: string;
@@ -368,7 +370,25 @@ export type WebviewMessage =
   | { type: 'selectProvider'; providerId: string }
   | { type: 'loadProviders' }
   | { type: 'setClaudeCliPath'; path: string }
-  | { type: 'setMcpConfigPath'; path: string };
+  | { type: 'setMcpConfigPath'; path: string }
+  // Context meter
+  | { type: 'compressContext' }
+  | { type: 'resetContext' };
+
+export interface ContextMeterData {
+  totalTokens: number;
+  maxTokens: number;
+  utilization: number;
+  healthScore: number;
+  compressionRecommended: boolean;
+  resetRecommended: boolean;
+  breakdown: Array<{
+    category: string;
+    tokens: number;
+    itemCount: number;
+    avgRelevance: number;
+  }>;
+}
 
 export interface PipelineGraphData {
   id: string;
