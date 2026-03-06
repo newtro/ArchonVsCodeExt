@@ -10,6 +10,8 @@ import { AttachmentChip } from './AttachmentChip';
 import { FilePickerPopup } from './FilePickerPopup';
 import type { SkillPickerItem } from './SkillPickerPopup';
 import { SkillPickerPopup } from './SkillPickerPopup';
+import type { ContextMeterData } from '@archon/core';
+import { ContextMeter } from './ContextMeter';
 
 interface Props {
   onSend: (content: string, attachments: Attachment[]) => void;
@@ -31,6 +33,9 @@ interface Props {
   activeProviderId: string;
   onProviderChange: (providerId: string) => void;
   skills: SkillPickerItem[];
+  contextMeter?: ContextMeterData | null;
+  onContextCompress?: () => void;
+  onContextReset?: () => void;
 }
 
 export function ChatInput({
@@ -41,6 +46,7 @@ export function ChatInput({
   pipelines, selectedPipelineId, onPipelineChange,
   providers, activeProviderId, onProviderChange,
   skills,
+  contextMeter, onContextCompress, onContextReset,
 }: Props) {
   const [input, setInput] = useState('');
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -253,6 +259,13 @@ export function ChatInput({
           </div>
 
           <div className="input-actions">
+            {contextMeter && (
+              <ContextMeter
+                data={contextMeter}
+                onCompress={onContextCompress}
+                onReset={onContextReset}
+              />
+            )}
             <button
               className="icon-btn"
               onClick={onPickFile}
