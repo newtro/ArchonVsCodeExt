@@ -1,0 +1,15 @@
+.vscode/**
+src/**
+node_modules/**
+tsconfig*
+*.tsbuildinfo
+vite.config.*
+*.map
+.gitignore
+.turbo/**
+**/*.ts
+!out/**
+!dist/**
+!resources/**
+resources/icon-option-*.svg
+*.vsix

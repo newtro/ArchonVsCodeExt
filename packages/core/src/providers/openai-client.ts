@@ -1,9 +1,16 @@
 /**
  * OpenAI API client with streaming support and dual auth modes.
  *
- * Uses the Chat Completions API (same format as OpenRouter) so our
- * AgentLoop works unchanged. Switches baseUrl and auth headers based
- * on whether the user is using an API key or ChatGPT subscription.
+ * Uses the Responses API (recommended by OpenAI):
+ * - Semantic streaming events (response.output_text.delta, function_call_arguments.delta, etc.)
+ * - Built-in tool/function calling support
+ * - System prompt via `instructions` parameter
+ *
+ * Auth modes:
+ * - API key: Bearer sk-... against api.openai.com/v1
+ * - Subscription: OAuth JWT against chatgpt.com/backend-api/codex (same API format)
+ *
+ * Both paths use the Responses API and emit the same StreamToken stream.
  */
 
 import type { ChatMessage, ModelInfo, StreamToken, ToolDefinition } from '../types';
@@ -17,48 +24,76 @@ export interface OpenAIClientConfig {
   tokens?: OpenAITokens;
 }
 
-// ── Static model catalog (OpenAI doesn't have a public models-with-pricing endpoint like OpenRouter) ──
+// ── Static model catalog ──
 
 const OPENAI_MODELS: ModelInfo[] = [
+  // GPT-5.4 (latest flagship)
+  { id: 'gpt-5.4', name: 'GPT-5.4', description: 'Most capable — reasoning + coding', contextLength: 1047576, pricing: { prompt: 2.50, completion: 15.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'gpt-5.4-pro', name: 'GPT-5.4 Pro', description: 'Maximum performance', contextLength: 1047576, pricing: { prompt: 30.00, completion: 180.00 }, supportsTools: true, supportsStreaming: true },
+  // GPT-5.3 Codex
+  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', description: 'Frontier agentic coding', contextLength: 1047576, pricing: { prompt: 1.75, completion: 14.00 }, supportsTools: true, supportsStreaming: true },
+  // GPT-5.2 family
+  { id: 'gpt-5.2', name: 'GPT-5.2', description: 'Flagship reasoning', contextLength: 1047576, pricing: { prompt: 1.75, completion: 14.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'gpt-5.2-pro', name: 'GPT-5.2 Pro', description: 'Heavy reasoning', contextLength: 1047576, pricing: { prompt: 21.00, completion: 168.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', description: 'Agentic coding', contextLength: 1047576, pricing: { prompt: 1.75, completion: 14.00 }, supportsTools: true, supportsStreaming: true },
+  // GPT-5.1 family
+  { id: 'gpt-5.1', name: 'GPT-5.1', contextLength: 1047576, pricing: { prompt: 1.25, completion: 10.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex', description: 'Agentic coding', contextLength: 1047576, pricing: { prompt: 1.25, completion: 10.00 }, supportsTools: true, supportsStreaming: true },
+  // GPT-5 family (base)
+  { id: 'gpt-5', name: 'GPT-5', description: 'Reasoning + coding', contextLength: 1047576, pricing: { prompt: 1.25, completion: 10.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Fast, cost-efficient', contextLength: 1047576, pricing: { prompt: 0.25, completion: 2.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'gpt-5-nano', name: 'GPT-5 Nano', description: 'Cheapest and fastest', contextLength: 1047576, pricing: { prompt: 0.05, completion: 0.40 }, supportsTools: true, supportsStreaming: true },
+  // Codex Mini (standalone coding model)
+  { id: 'codex-mini-latest', name: 'Codex Mini', description: 'Lightweight coding model', contextLength: 1047576, pricing: { prompt: 1.50, completion: 6.00 }, supportsTools: true, supportsStreaming: true },
+  // GPT-4.1 family
   { id: 'gpt-4.1', name: 'GPT-4.1', contextLength: 1047576, pricing: { prompt: 2.00, completion: 8.00 }, supportsTools: true, supportsStreaming: true },
   { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', contextLength: 1047576, pricing: { prompt: 0.40, completion: 1.60 }, supportsTools: true, supportsStreaming: true },
   { id: 'gpt-4.1-nano', name: 'GPT-4.1 Nano', contextLength: 1047576, pricing: { prompt: 0.10, completion: 0.40 }, supportsTools: true, supportsStreaming: true },
+  // GPT-4o family
   { id: 'gpt-4o', name: 'GPT-4o', contextLength: 128000, pricing: { prompt: 2.50, completion: 10.00 }, supportsTools: true, supportsStreaming: true },
   { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextLength: 128000, pricing: { prompt: 0.15, completion: 0.60 }, supportsTools: true, supportsStreaming: true },
-  { id: 'o3', name: 'o3', description: 'Deep reasoning model', contextLength: 200000, pricing: { prompt: 2.00, completion: 8.00 }, supportsTools: true, supportsStreaming: true },
-  { id: 'o4-mini', name: 'o4-mini', description: 'Budget reasoning model', contextLength: 200000, pricing: { prompt: 1.10, completion: 4.40 }, supportsTools: true, supportsStreaming: true },
+  // Reasoning (o-series)
+  { id: 'o3', name: 'o3', description: 'Deep reasoning', contextLength: 200000, pricing: { prompt: 2.00, completion: 8.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'o3-pro', name: 'o3-pro', description: 'Heavy reasoning', contextLength: 200000, pricing: { prompt: 20.00, completion: 80.00 }, supportsTools: true, supportsStreaming: true },
+  { id: 'o4-mini', name: 'o4-mini', description: 'Budget reasoning', contextLength: 200000, pricing: { prompt: 1.10, completion: 4.40 }, supportsTools: true, supportsStreaming: true },
 ];
 
-// ── Content part types ──
+// ── Types for Responses API ──
 
-type ContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } };
+/** Items in the Responses API `input` array. */
+type ResponseInputItem =
+  | { role: 'user'; content: string | ResponseContentPart[] }
+  | { role: 'assistant'; content: string }
+  | { type: 'function_call'; name: string; call_id: string; arguments: string }
+  | { type: 'function_call_output'; call_id: string; output: string };
 
-interface OpenAIMessage {
-  role: string;
-  content: string | ContentPart[] | null;
-  tool_calls?: OpenAIToolCall[];
-  tool_call_id?: string;
-}
+type ResponseContentPart =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string };
 
-interface OpenAIToolCall {
-  id: string;
+/** Tool definition for the Responses API (flat format — NOT wrapped in function:). */
+interface ResponseTool {
   type: 'function';
-  function: { name: string; arguments: string };
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
 }
 
-interface OpenAITool {
-  type: 'function';
-  function: { name: string; description: string; parameters: Record<string, unknown> };
-}
+// ── Reasoning model detection ──
 
-interface OpenAIChatRequest {
-  model: string;
-  messages: OpenAIMessage[];
-  tools?: OpenAITool[];
-  stream: boolean;
-  temperature?: number;
+/**
+ * Reasoning models (GPT-5.x, codex variants, o-series) do NOT support
+ * `temperature`. They use `reasoning.effort` instead (low/medium/high).
+ * Non-reasoning models (GPT-4.1, GPT-4o) use `temperature` as usual.
+ */
+function isReasoningModel(model: string): boolean {
+  const m = model.toLowerCase();
+  return (
+    m.startsWith('gpt-5') ||
+    m.startsWith('o3') ||
+    m.startsWith('o4') ||
+    m.includes('codex')
+  );
 }
 
 // ── Client ──
@@ -119,12 +154,9 @@ export class OpenAIClient {
 
   async listModels(): Promise<ModelInfo[]> {
     if (this.authMode === 'subscription') {
-      // Subscription users get a curated list — the Codex backend
-      // doesn't expose a /models endpoint the same way
       return OPENAI_MODELS;
     }
 
-    // For API key users, try fetching from the API, fall back to static list
     try {
       const res = await fetch(`${this.baseUrl}/models`, {
         headers: this.authHeaders,
@@ -134,10 +166,9 @@ export class OpenAIClient {
 
       const data = await res.json() as { data: Array<{ id: string; owned_by?: string }> };
 
-      // Filter to chat-capable models and merge with our pricing catalog
       const catalogMap = new Map(OPENAI_MODELS.map(m => [m.id, m]));
       const apiModels = data.data
-        .filter(m => m.id.startsWith('gpt-') || m.id.startsWith('o3') || m.id.startsWith('o4'))
+        .filter(m => m.id.startsWith('gpt-') || m.id.startsWith('o3') || m.id.startsWith('o4') || m.id.startsWith('codex-'))
         .map(m => {
           const catalogEntry = catalogMap.get(m.id);
           if (catalogEntry) return catalogEntry;
@@ -150,7 +181,6 @@ export class OpenAIClient {
           };
         });
 
-      // Ensure all catalog models are present even if API didn't return them
       const resultIds = new Set(apiModels.map(m => m.id));
       for (const catalogModel of OPENAI_MODELS) {
         if (!resultIds.has(catalogModel.id)) {
@@ -164,20 +194,30 @@ export class OpenAIClient {
     }
   }
 
-  // ── Simple (non-streaming) chat ──
+  // ── Simple (non-streaming) chat via Responses API ──
 
   async simpleChat(
     model: string,
     messages: Array<{ role: string; content: string }>,
     temperature?: number,
   ): Promise<string> {
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    const instructions = messages.find(m => m.role === 'system')?.content ?? '';
+    const input = messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+
+    const res = await fetch(`${this.baseUrl}/responses`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.authHeaders,
-      },
-      body: JSON.stringify({ model, messages, temperature }),
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders },
+      body: JSON.stringify({
+        model,
+        instructions,
+        input,
+        store: false,
+        ...(isReasoningModel(model)
+          ? { reasoning: { effort: 'medium' } }
+          : temperature !== undefined ? { temperature } : {}),
+      }),
     });
 
     if (!res.ok) {
@@ -185,11 +225,11 @@ export class OpenAIClient {
       throw new Error(`OpenAI error ${res.status}: ${errText}`);
     }
 
-    const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-    return data.choices?.[0]?.message?.content ?? '';
+    const data = await res.json() as { output_text?: string };
+    return data.output_text ?? '';
   }
 
-  // ── Streaming chat (same interface as OpenRouterClient) ──
+  // ── Streaming chat via Responses API (StreamingLLMClient interface) ──
 
   async *streamChat(
     model: string,
@@ -198,35 +238,63 @@ export class OpenAIClient {
     temperature?: number,
     _options?: { webSearch?: boolean },
   ): AsyncGenerator<StreamToken> {
-    const body: OpenAIChatRequest = {
+    const { instructions, input } = this.convertToResponsesInput(messages);
+
+    const body: Record<string, unknown> = {
       model,
-      messages: this.convertMessages(messages),
+      instructions,
+      input,
       stream: true,
-      temperature,
+      store: false,
     };
 
+    // Reasoning models (GPT-5.x, codex, o-series) use reasoning.effort
+    // instead of temperature. Sending temperature causes silent failures.
+    if (isReasoningModel(model)) {
+      body.reasoning = { effort: 'medium' };
+    } else if (temperature !== undefined) {
+      body.temperature = temperature;
+    }
+
     if (tools && tools.length > 0) {
-      body.tools = tools.map(t => ({
-        type: 'function' as const,
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters as unknown as Record<string, unknown>,
-        },
+      body.tools = tools.map((t): ResponseTool => ({
+        type: 'function',
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters as unknown as Record<string, unknown>,
       }));
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.authHeaders,
-      },
-      body: JSON.stringify(body),
+    // Debug: log the request for troubleshooting
+    console.log('[OpenAI] streamChat request:', {
+      url: `${this.baseUrl}/responses`,
+      model,
+      inputLength: input.length,
+      hasTools: !!(tools && tools.length > 0),
+      toolCount: tools?.length ?? 0,
+      isReasoning: isReasoningModel(model),
+      bodyKeys: Object.keys(body),
     });
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/responses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders },
+        body: JSON.stringify(body),
+      });
+    } catch (fetchErr) {
+      const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+      console.error('[OpenAI] fetch failed:', msg);
+      yield { type: 'error', error: `OpenAI fetch failed: ${msg}` };
+      return;
+    }
+
+    console.log('[OpenAI] response status:', res.status, res.statusText);
 
     if (!res.ok) {
       const errText = await res.text();
+      console.error('[OpenAI] API error:', res.status, errText);
       yield { type: 'error', error: `OpenAI error ${res.status}: ${errText}` };
       return;
     }
@@ -236,10 +304,17 @@ export class OpenAIClient {
       return;
     }
 
+    // Track function calls in progress.
+    // Keyed by BOTH item.id (item_id in argument events) and item.call_id
+    // because argument events reference item_id while we need call_id for tool execution.
+    const pendingCalls = new Map<string, { callId: string; name: string; args: string }>();
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    const currentToolCalls = new Map<number, { id: string; name: string; args: string }>();
+    let hasYieldedContent = false;
+    let responseStatus: string | undefined;
+    let fallbackText = '';
 
     try {
       while (true) {
@@ -253,68 +328,142 @@ export class OpenAIClient {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed || trimmed === 'data: [DONE]') continue;
-          if (!trimmed.startsWith('data: ')) continue;
+
+          // Handle both "data: {...}" and "data:{...}" (with/without space)
+          let jsonStr: string | null = null;
+          if (trimmed.startsWith('data: ')) {
+            jsonStr = trimmed.slice(6);
+          } else if (trimmed.startsWith('data:')) {
+            jsonStr = trimmed.slice(5);
+          }
+          if (!jsonStr || jsonStr === '[DONE]') continue;
 
           try {
-            const json = JSON.parse(trimmed.slice(6)) as {
-              choices?: Array<{
-                delta?: {
-                  content?: string;
-                  tool_calls?: Array<{
-                    index: number;
-                    id?: string;
-                    function?: { name?: string; arguments?: string };
-                  }>;
-                };
-                finish_reason?: string;
-              }>;
-            };
+            const event = JSON.parse(jsonStr) as Record<string, unknown>;
+            const eventType = event.type as string;
 
-            const choice = json.choices?.[0];
-            if (!choice) continue;
-
-            const delta = choice.delta;
-            if (delta?.content) {
-              yield { type: 'text', content: delta.content };
+            // Debug: log each SSE event type (except high-frequency deltas)
+            if (eventType && !eventType.includes('.delta')) {
+              console.log('[OpenAI] SSE event:', eventType);
             }
 
-            if (delta?.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index;
-                if (tc.id) {
-                  currentToolCalls.set(idx, { id: tc.id, name: '', args: '' });
-                  yield { type: 'tool_call_start', toolCall: { id: tc.id } };
+            switch (eventType) {
+              // ── Text streaming ──
+              case 'response.output_text.delta': {
+                const delta = event.delta as string;
+                if (delta) {
+                  hasYieldedContent = true;
+                  yield { type: 'text', content: delta };
                 }
-                const current = currentToolCalls.get(idx);
-                if (current) {
-                  if (tc.function?.name) {
-                    current.name = tc.function.name;
-                  }
-                  if (tc.function?.arguments) {
-                    current.args += tc.function.arguments;
-                    yield { type: 'tool_call_args', content: tc.function.arguments };
-                  }
-                }
+                break;
               }
-            }
 
-            if (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop') {
-              for (const [, tc] of currentToolCalls) {
-                let parsedArgs: Record<string, unknown> = {};
-                try {
-                  parsedArgs = JSON.parse(tc.args) as Record<string, unknown>;
-                } catch {
-                  // args might be empty
+              // ── Function call started ──
+              case 'response.output_item.added': {
+                const item = event.item as Record<string, unknown> | undefined;
+                if (item?.type === 'function_call') {
+                  const itemId = item.id as string;
+                  const callId = (item.call_id ?? item.id) as string;
+                  const name = item.name as string;
+                  const entry = { callId, name, args: '' };
+                  // Store by item.id (used by argument events as item_id)
+                  pendingCalls.set(itemId, entry);
+                  // Also store by call_id if different (belt-and-suspenders)
+                  if (callId !== itemId) {
+                    pendingCalls.set(callId, entry);
+                  }
+                  hasYieldedContent = true;
+                  yield { type: 'tool_call_start', toolCall: { id: callId } };
                 }
-                yield {
-                  type: 'tool_call_end',
-                  toolCall: { id: tc.id, name: tc.name, arguments: parsedArgs },
-                };
+                break;
               }
-              currentToolCalls.clear();
+
+              // ── Function call arguments streaming ──
+              case 'response.function_call_arguments.delta': {
+                // Responses API uses item_id (not call_id) in argument events
+                const lookupId = (event.item_id ?? event.call_id) as string;
+                const delta = event.delta as string;
+                const pending = pendingCalls.get(lookupId);
+                if (pending && delta) {
+                  pending.args += delta;
+                  yield { type: 'tool_call_args', content: delta };
+                }
+                break;
+              }
+
+              // ── Function call arguments complete ──
+              case 'response.function_call_arguments.done': {
+                // Responses API uses item_id (not call_id) in argument events
+                const lookupId = (event.item_id ?? event.call_id) as string;
+                const fullArgs = event.arguments as string;
+                const pending = pendingCalls.get(lookupId);
+                if (pending) {
+                  let parsedArgs: Record<string, unknown> = {};
+                  try {
+                    parsedArgs = JSON.parse(fullArgs || pending.args) as Record<string, unknown>;
+                  } catch { /* empty args */ }
+                  yield {
+                    type: 'tool_call_end',
+                    toolCall: { id: pending.callId, name: pending.name, arguments: parsedArgs },
+                  };
+                  pendingCalls.delete(lookupId);
+                }
+                break;
+              }
+
+              // ── Response completed — extract fallback text ──
+              case 'response.completed': {
+                responseStatus = (event.response as Record<string, unknown>)?.status as string | undefined;
+                const response = event.response as Record<string, unknown> | undefined;
+                if (response?.output_text) {
+                  fallbackText = response.output_text as string;
+                }
+                // Also check output array for text
+                const output = response?.output as Array<Record<string, unknown>> | undefined;
+                if (output && !fallbackText) {
+                  for (const item of output) {
+                    if (item.type === 'message') {
+                      const content = item.content as Array<Record<string, unknown>> | undefined;
+                      if (content) {
+                        for (const part of content) {
+                          if (part.type === 'output_text' && part.text) {
+                            fallbackText += part.text as string;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                break;
+              }
+
+              // ── Response failed / incomplete ──
+              case 'response.failed':
+              case 'response.incomplete': {
+                const response = event.response as Record<string, unknown> | undefined;
+                const status = response?.status as string | undefined;
+                const statusDetails = response?.incomplete_details ?? response?.error;
+                const errorDetail = statusDetails
+                  ? JSON.stringify(statusDetails)
+                  : `Response ${eventType.split('.')[1]} (status: ${status ?? 'unknown'})`;
+                yield { type: 'error', error: `OpenAI: ${errorDetail}` };
+                break;
+              }
+
+              // ── Error event ──
+              case 'error': {
+                const errorMsg = (event.message ?? event.error ?? 'Unknown API error') as string;
+                yield { type: 'error', error: errorMsg };
+                break;
+              }
+
+              // Other events: response.created, response.in_progress,
+              // response.output_item.done, response.content_part.added,
+              // response.output_text.done, etc. — no action needed.
             }
-          } catch {
-            // Skip unparseable lines
+          } catch (parseErr) {
+            // Log unparseable lines for debugging
+            console.warn('[OpenAI] Unparseable SSE line:', jsonStr?.slice(0, 200));
           }
         }
       }
@@ -322,51 +471,94 @@ export class OpenAIClient {
       reader.releaseLock();
     }
 
+    // If we never yielded any content but have fallback text from response.completed,
+    // emit it now — this handles edge cases where delta events were missed.
+    if (!hasYieldedContent && fallbackText) {
+      yield { type: 'text', content: fallbackText };
+    }
+
+    // If we got absolutely nothing, surface an informative error
+    if (!hasYieldedContent && !fallbackText) {
+      const detail = responseStatus ? ` (response status: ${responseStatus})` : '';
+      yield { type: 'error', error: `OpenAI returned an empty response${detail}. The model may not be available for your account.` };
+      return;
+    }
+
     yield { type: 'done' };
   }
 
-  // ── Message conversion (identical to OpenRouterClient) ──
+  /**
+   * Convert our internal ChatMessage[] to Responses API input format.
+   *
+   * The Responses API input array accumulates ALL prior exchanges:
+   * - System messages → extracted to `instructions` parameter
+   * - User messages → { role: 'user', content: '...' }
+   * - Assistant text → { role: 'assistant', content: '...' }
+   * - Assistant tool calls → { type: 'function_call', call_id, name, arguments }
+   *   (these are the model's output items appended back as input for the next turn)
+   * - Tool results → { type: 'function_call_output', call_id, output }
+   *
+   * Key: function_call items come BEFORE the assistant text for that turn,
+   * matching the order the model produced them (tool calls first, then summary text).
+   */
+  private convertToResponsesInput(messages: ChatMessage[]): { instructions: string; input: ResponseInputItem[] } {
+    let instructions = '';
+    const input: ResponseInputItem[] = [];
 
-  private convertMessages(messages: ChatMessage[]): OpenAIMessage[] {
-    return messages.map(m => {
-      const msg: OpenAIMessage = {
-        role: m.role,
-        content: m.content || null,
-      };
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        instructions = msg.content;
+        continue;
+      }
 
-      // Build multimodal content if the message has image/PDF attachments
-      if (m.attachments && m.attachments.length > 0 && m.role === 'user') {
-        const parts: ContentPart[] = [];
-        if (m.content) {
-          parts.push({ type: 'text', text: m.content });
+      if (msg.role === 'user') {
+        if (msg.attachments && msg.attachments.length > 0) {
+          const parts: ResponseContentPart[] = [];
+          if (msg.content) {
+            parts.push({ type: 'input_text', text: msg.content });
+          }
+          for (const att of msg.attachments) {
+            if ((att.type === 'image' || att.type === 'pdf') && att.dataUri) {
+              parts.push({ type: 'input_image', image_url: att.dataUri });
+            }
+          }
+          input.push({ role: 'user', content: parts.length > 0 ? parts : msg.content });
+        } else {
+          input.push({ role: 'user', content: msg.content });
         }
-        for (const att of m.attachments) {
-          if ((att.type === 'image' || att.type === 'pdf') && att.dataUri) {
-            parts.push({ type: 'image_url', image_url: { url: att.dataUri } });
+        continue;
+      }
+
+      if (msg.role === 'assistant') {
+        // The Responses API expects the model's output items appended back as input.
+        // Tool calls become function_call items; text becomes an assistant message.
+        // Order: function_call items first (as they were in the model output),
+        // then the assistant text (if any).
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          for (const tc of msg.toolCalls) {
+            input.push({
+              type: 'function_call',
+              name: tc.name,
+              call_id: tc.id,
+              arguments: JSON.stringify(tc.arguments),
+            });
           }
         }
-        if (parts.length > 0) {
-          msg.content = parts;
+        if (msg.content) {
+          input.push({ role: 'assistant', content: msg.content });
         }
+        continue;
       }
 
-      if (m.toolCalls && m.toolCalls.length > 0) {
-        msg.tool_calls = m.toolCalls.map(tc => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: {
-            name: tc.name,
-            arguments: JSON.stringify(tc.arguments),
-          },
-        }));
-        if (!msg.content) msg.content = null;
+      if (msg.role === 'tool' && msg.toolCallId) {
+        input.push({
+          type: 'function_call_output',
+          call_id: msg.toolCallId,
+          output: msg.content,
+        });
       }
+    }
 
-      if (m.toolCallId) {
-        msg.tool_call_id = m.toolCallId;
-      }
-
-      return msg;
-    });
+    return { instructions, input };
   }
 }

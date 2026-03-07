@@ -254,7 +254,7 @@ export type ExtensionMessage =
   | { type: 'askUser'; id: string; prompt: string; options?: AskUserOptionInput[]; multiSelect?: boolean }
   | { type: 'filePicked'; path: string; content: string }
   | { type: 'workspaceFilesResult'; files: string[] }
-  | { type: 'settingsLoaded'; securityLevel: string; archiveEnabled: boolean; modelPool: string[]; hasBraveApiKey: boolean; webSearchEnabled: boolean; activeProvider: string }
+  | { type: 'settingsLoaded'; securityLevel: string; archiveEnabled: boolean; modelPool: string[]; hasBraveApiKey: boolean; webSearchEnabled: boolean; activeProvider: string; claudeCliPath?: string; mcpConfigPath?: string }
   | { type: 'chatSessionsLoaded'; sessions: ChatSessionSummary[] }
   | { type: 'chatSessionLoaded'; session: ChatSession }
   | { type: 'benchmarksLoaded'; sources: BenchmarkSource[] }

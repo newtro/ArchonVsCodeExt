@@ -335,9 +335,11 @@ export class AgentLoop {
   /**
    * Load prior conversation history (e.g. from a saved session).
    * Replaces all messages after the system prompt.
+   * System messages from history are filtered out — we keep only
+   * the system prompt set by this agent loop's config.
    */
   loadHistory(history: ChatMessage[]): void {
-    this.messages = [this.messages[0], ...history];
+    this.messages = [this.messages[0], ...history.filter(m => m.role !== 'system')];
   }
 
   private async streamResponse(messages?: ChatMessage[]): Promise<{ textContent: string; toolCalls: ToolCall[] }> {

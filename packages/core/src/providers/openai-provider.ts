@@ -27,6 +27,7 @@ export class OpenAIProvider implements LLMProvider {
   private client: OpenAIClient;
   private refreshManager: TokenRefreshManager | null = null;
   private subscriptionInfo: OpenAISubscriptionInfo | null = null;
+  private currentTokens: OpenAITokens | null = null;
 
   constructor(config?: OpenAIProviderConfig) {
     this.client = new OpenAIClient({
@@ -36,8 +37,11 @@ export class OpenAIProvider implements LLMProvider {
     });
 
     // Extract subscription info if tokens provided
-    if (config?.tokens?.idToken) {
-      this.subscriptionInfo = extractSubscriptionInfo(config.tokens.idToken);
+    if (config?.tokens) {
+      this.currentTokens = config.tokens;
+      if (config.tokens.idToken) {
+        this.subscriptionInfo = extractSubscriptionInfo(config.tokens.idToken);
+      }
     }
   }
 
@@ -50,6 +54,7 @@ export class OpenAIProvider implements LLMProvider {
 
   setTokens(tokens: OpenAITokens): void {
     this.client.setTokens(tokens);
+    this.currentTokens = tokens;
     this.subscriptionInfo = extractSubscriptionInfo(tokens.idToken);
   }
 
@@ -84,13 +89,14 @@ export class OpenAIProvider implements LLMProvider {
    * Call this on extension activation when subscription tokens are loaded from storage.
    */
   startRefreshManager(callbacks: Pick<OpenAIAuthCallbacks, 'onTokensUpdated'> & { onError?: (error: string) => void }): void {
-    const tokens = this.refreshManager?.getTokens() ?? (this.client.getAuthMode() === 'subscription' ? this.getCurrentTokens() : null);
+    const tokens = this.currentTokens;
     if (!tokens) return;
 
     this.stopRefreshManager();
     this.refreshManager = new TokenRefreshManager({
       onTokensUpdated: async (newTokens) => {
         this.client.setTokens(newTokens);
+        this.currentTokens = newTokens;
         this.subscriptionInfo = extractSubscriptionInfo(newTokens.idToken);
         await callbacks.onTokensUpdated(newTokens);
       },
@@ -102,15 +108,15 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   stopRefreshManager(): void {
-    this.refreshManager?.stop();
-    this.refreshManager = null;
+    if (this.refreshManager) {
+      this.refreshManager.stop();
+      this.refreshManager = null;
+    }
   }
 
-  /** Get current tokens (used internally for refresh manager initialization). */
-  private getCurrentTokens(): OpenAITokens | null {
-    // The client stores tokens internally; we access them through the refresh manager
-    // or they were passed during construction/setTokens
-    return this.refreshManager?.getTokens() ?? null;
+  /** Get current tokens. */
+  getTokens(): OpenAITokens | null {
+    return this.currentTokens;
   }
 
   // ── LLMProvider interface ──

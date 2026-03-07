@@ -388,11 +388,12 @@ export function SettingsPanel({
         </div>
       </section>
 
-      {/* Model Pool */}
+      {/* OpenRouter Model Pool */}
       <section className="settings-section">
-        <h4>Model Pool</h4>
+        <h4>OpenRouter Model Pool</h4>
         <p className="settings-hint">
-          Models that appear in the chat dropdown. Empty pool = all models shown.
+          Filter the OpenRouter model list to a shorter set. Empty pool = all OpenRouter models shown.
+          Does not affect Claude CLI or OpenAI model lists.
         </p>
 
         {/* Add model dropdown */}
@@ -409,7 +410,7 @@ export function SettingsPanel({
             <div className="model-pool-dropdown">
               {availableModels.length === 0 ? (
                 <div className="model-pool-empty">
-                  {models.length === 0 ? 'No models loaded. Set your API key first.' : 'No more models to add.'}
+                  {models.length === 0 ? 'No models loaded. Set your OpenRouter API key first.' : 'No more models to add.'}
                 </div>
               ) : (
                 availableModels.slice(0, 50).map(m => (

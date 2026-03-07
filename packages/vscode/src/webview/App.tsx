@@ -255,6 +255,12 @@ export function App() {
           if (msg.activeProvider) {
             setActiveProviderId(msg.activeProvider);
           }
+          if (msg.claudeCliPath) {
+            setClaudeCliPath(msg.claudeCliPath);
+          }
+          if (msg.mcpConfigPath) {
+            setMcpConfigPath(msg.mcpConfigPath);
+          }
           break;
 
         case 'providersLoaded':
@@ -765,7 +771,7 @@ export function App() {
   const showPipelineSplitView = isLoading && selectedPipelineId !== 'default' && activeProviderId !== 'claude-cli';
 
   // Filter models for chat input based on pool.
-  // Model pool only applies to OpenRouter — Claude CLI always shows all its models.
+  // Model pool only applies to OpenRouter — other providers have curated model lists.
   const chatModels = modelPool.length > 0 && activeProviderId === 'openrouter'
     ? models.filter(m => modelPool.includes(m.id))
     : models;

@@ -117,7 +117,7 @@ export async function startOAuthFlow(callbacks: OpenAIAuthCallbacks): Promise<Op
     id_token_add_organizations: 'true',
     codex_cli_simplified_flow: 'true',
     state,
-    originator: 'archon-vscode',
+    originator: 'codex_vscode',
   });
 
   const authorizeUrl = `${AUTH_BASE}/oauth/authorize?${params.toString()}`;

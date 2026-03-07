@@ -206,31 +206,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Initialize memory system if we have a workspace
     if (workspaceRoot) {
-      this.memoryDb = new MemoryDatabase(workspaceRoot);
-      this.indexer = new CodebaseIndexer(workspaceRoot, this.memoryDb);
-      this.graphBuilder = new GraphBuilder(this.memoryDb);
-      this.sessionMemory = new SessionMemory(this.memoryDb);
-      this.interactionArchive = new InteractionArchive(this.memoryDb);
       this.rulesEngine = new RulesEngine(workspaceRoot);
       this.depAwareness = new DependencyAwareness(workspaceRoot);
-      this.contextManager = new ContextManager(this.memoryDb);
-      this.contextManager.setLayers({
-        rulesEngine: this.rulesEngine,
-        indexer: this.indexer,
-        sessionMemory: this.sessionMemory,
-        archive: this.interactionArchive,
-        graphBuilder: this.graphBuilder,
-        depAwareness: this.depAwareness,
-      });
-      this.autoSummarizer = new AutoSummarizer(
-        this.memoryDb, this.sessionMemory, this.interactionArchive,
-      );
-      this.editTracker = new EditTracker(this.memoryDb, this.sessionMemory);
-
-      // Run startup tasks: decay old memories, load rules, scan deps
-      this.sessionMemory.applyDecay();
       this.rulesEngine.loadRules();
       this.depAwareness.scan();
+
+      try {
+        this.memoryDb = new MemoryDatabase(workspaceRoot);
+        this.indexer = new CodebaseIndexer(workspaceRoot, this.memoryDb);
+        this.graphBuilder = new GraphBuilder(this.memoryDb);
+        this.sessionMemory = new SessionMemory(this.memoryDb);
+        this.interactionArchive = new InteractionArchive(this.memoryDb);
+        this.contextManager = new ContextManager(this.memoryDb);
+        this.contextManager.setLayers({
+          rulesEngine: this.rulesEngine,
+          indexer: this.indexer,
+          sessionMemory: this.sessionMemory,
+          archive: this.interactionArchive,
+          graphBuilder: this.graphBuilder,
+          depAwareness: this.depAwareness,
+        });
+        this.autoSummarizer = new AutoSummarizer(
+          this.memoryDb, this.sessionMemory, this.interactionArchive,
+        );
+        this.editTracker = new EditTracker(this.memoryDb, this.sessionMemory);
+        this.sessionMemory.applyDecay();
+      } catch (e) {
+        console.warn('Archon: Memory system unavailable (native modules not found). Running without persistent memory.', e);
+      }
 
       // File watcher: decay memories and re-index graph on save
       this.fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx,py,rs,go,java,cs,css,html}');
@@ -646,7 +649,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const braveKey = await this.context.secrets.get('archon.braveApiKey');
         const webSearchEnabled = this.context.globalState.get<boolean>('archon.webSearchEnabled', true);
         const activeProvider = this.providerManager.getActiveId();
-        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled, activeProvider });
+        const cliPath = this.context.globalState.get<string>('archon.claudeCliPath', 'claude');
+        const mcpPath = this.context.globalState.get<string>('archon.mcpConfigPath', '');
+        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled, activeProvider, claudeCliPath: cliPath, mcpConfigPath: mcpPath || undefined });
         break;
       }
       case 'setBraveApiKey':
