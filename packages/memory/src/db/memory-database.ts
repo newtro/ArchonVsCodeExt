@@ -11,7 +11,7 @@
  * - Telemetry metrics
  */
 
-import Database from 'better-sqlite3';
+import type DatabaseType from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -19,7 +19,7 @@ import * as fs from 'fs';
 const SCHEMA_VERSION = 1;
 
 export class MemoryDatabase {
-  private db: Database.Database;
+  private db: DatabaseType.Database;
   private dbPath: string;
 
   constructor(workspaceRoot: string) {
@@ -27,6 +27,10 @@ export class MemoryDatabase {
     fs.mkdirSync(archonDir, { recursive: true });
 
     this.dbPath = path.join(archonDir, 'memory.db');
+    // Lazy-load better-sqlite3 so the module doesn't crash at import time
+    // when native bindings are unavailable (e.g. marketplace install)
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Database = require('better-sqlite3');
     this.db = new Database(this.dbPath);
 
     // Performance pragmas
@@ -39,7 +43,7 @@ export class MemoryDatabase {
   }
 
   /** Get the underlying better-sqlite3 Database instance for direct queries. */
-  getDb(): Database.Database {
+  getDb(): DatabaseType.Database {
     return this.db;
   }
 

@@ -50,10 +50,15 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // Load API key from SecretStorage on activation
+  // Load API keys from SecretStorage on activation
   context.secrets.get('archon.openRouterApiKey').then(key => {
     if (key) chatProvider.setApiKey(key);
   });
+  context.secrets.get('archon.openaiApiKey').then(key => {
+    if (key) chatProvider.setOpenAIApiKey(key);
+  });
+  // Load OpenAI subscription tokens (OAuth)
+  chatProvider.loadOpenAITokens();
 
   // Project trust gate
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

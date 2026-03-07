@@ -21,6 +21,7 @@ import {
   getBuiltInSkillTemplates,
   OpenRouterProvider,
   ClaudeCliProvider,
+  OpenAIProvider,
   ProviderManager,
   detectClaudeCli,
   HookEngine,
@@ -28,6 +29,7 @@ import {
   getHookTemplates,
 } from '@archon/core';
 import type { HookConfiguration, HookChain, HookTemplate } from '@archon/core';
+import type { OpenAITokens, OpenAIAuthMode } from '@archon/core';
 import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput, ProviderId, ProviderInfo } from '@archon/core';
 import {
   MemoryDatabase, CodebaseIndexer, ApiEmbeddingProvider,
@@ -81,6 +83,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private providerManager: ProviderManager;
   private openRouterProvider: OpenRouterProvider;
   private claudeCliProvider: ClaudeCliProvider;
+  private openAIProvider: OpenAIProvider;
   private agentLoop?: AgentLoop;
   private claudeCliSessionId: string | null = null;
   private claudeCliExecutor?: import('@archon/core').Executor;
@@ -123,13 +126,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.context = context;
     this.openRouterProvider = new OpenRouterProvider({ apiKey: '' });
     this.claudeCliProvider = new ClaudeCliProvider();
+    this.openAIProvider = new OpenAIProvider();
     this.providerManager = new ProviderManager();
     this.providerManager.register(this.openRouterProvider);
     this.providerManager.register(this.claudeCliProvider);
+    this.providerManager.register(this.openAIProvider);
+
+    // Restore saved OpenAI auth mode
+    const savedOpenAIAuthMode = context.globalState.get<string>('archon.openaiAuthMode', 'api-key');
+    if (savedOpenAIAuthMode === 'api-key' || savedOpenAIAuthMode === 'subscription') {
+      this.openAIProvider.setAuthMode(savedOpenAIAuthMode as OpenAIAuthMode);
+    }
 
     // Restore saved provider preference
     const savedProvider = context.globalState.get<string>('archon.activeProvider', 'openrouter');
-    if (savedProvider === 'claude-cli' || savedProvider === 'openrouter') {
+    if (savedProvider === 'claude-cli' || savedProvider === 'openrouter' || savedProvider === 'openai') {
       try { this.providerManager.setActive(savedProvider as ProviderId); } catch { /* keep default */ }
     }
     this.selectedModelId = context.globalState.get<string>('archon.selectedModelId', '');
@@ -195,31 +206,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Initialize memory system if we have a workspace
     if (workspaceRoot) {
-      this.memoryDb = new MemoryDatabase(workspaceRoot);
-      this.indexer = new CodebaseIndexer(workspaceRoot, this.memoryDb);
-      this.graphBuilder = new GraphBuilder(this.memoryDb);
-      this.sessionMemory = new SessionMemory(this.memoryDb);
-      this.interactionArchive = new InteractionArchive(this.memoryDb);
       this.rulesEngine = new RulesEngine(workspaceRoot);
       this.depAwareness = new DependencyAwareness(workspaceRoot);
-      this.contextManager = new ContextManager(this.memoryDb);
-      this.contextManager.setLayers({
-        rulesEngine: this.rulesEngine,
-        indexer: this.indexer,
-        sessionMemory: this.sessionMemory,
-        archive: this.interactionArchive,
-        graphBuilder: this.graphBuilder,
-        depAwareness: this.depAwareness,
-      });
-      this.autoSummarizer = new AutoSummarizer(
-        this.memoryDb, this.sessionMemory, this.interactionArchive,
-      );
-      this.editTracker = new EditTracker(this.memoryDb, this.sessionMemory);
-
-      // Run startup tasks: decay old memories, load rules, scan deps
-      this.sessionMemory.applyDecay();
       this.rulesEngine.loadRules();
       this.depAwareness.scan();
+
+      try {
+        this.memoryDb = new MemoryDatabase(workspaceRoot);
+        this.indexer = new CodebaseIndexer(workspaceRoot, this.memoryDb);
+        this.graphBuilder = new GraphBuilder(this.memoryDb);
+        this.sessionMemory = new SessionMemory(this.memoryDb);
+        this.interactionArchive = new InteractionArchive(this.memoryDb);
+        this.contextManager = new ContextManager(this.memoryDb);
+        this.contextManager.setLayers({
+          rulesEngine: this.rulesEngine,
+          indexer: this.indexer,
+          sessionMemory: this.sessionMemory,
+          archive: this.interactionArchive,
+          graphBuilder: this.graphBuilder,
+          depAwareness: this.depAwareness,
+        });
+        this.autoSummarizer = new AutoSummarizer(
+          this.memoryDb, this.sessionMemory, this.interactionArchive,
+        );
+        this.editTracker = new EditTracker(this.memoryDb, this.sessionMemory);
+        this.sessionMemory.applyDecay();
+      } catch (e) {
+        console.warn('Archon: Memory system unavailable (native modules not found). Running without persistent memory.', e);
+      }
 
       // File watcher: decay memories and re-index graph on save
       this.fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx,py,rs,go,java,cs,css,html}');
@@ -406,6 +420,80 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.loadModels();
   }
 
+  setOpenAIApiKey(key: string): void {
+    this.openAIProvider.setApiKey(key);
+    if (this.providerManager.getActiveId() === 'openai') {
+      this.loadModels();
+    }
+    this.sendOpenAIAuthStatus();
+  }
+
+  async loadOpenAITokens(): Promise<void> {
+    const tokensJson = await this.context.secrets.get('archon.openaiTokens');
+    if (tokensJson) {
+      try {
+        const tokens: OpenAITokens = JSON.parse(tokensJson);
+        this.openAIProvider.setTokens(tokens);
+        this.openAIProvider.startRefreshManager({
+          onTokensUpdated: async (newTokens) => {
+            await this.context.secrets.store('archon.openaiTokens', JSON.stringify(newTokens));
+          },
+          onError: (error) => {
+            this.postMessage({ type: 'openaiAuthStatus', mode: 'subscription', authenticated: false, error });
+          },
+        });
+      } catch {
+        // Corrupted tokens — clear them
+        await this.context.secrets.delete('archon.openaiTokens');
+      }
+    }
+  }
+
+  async startOpenAIOAuth(): Promise<void> {
+    try {
+      const tokens = await this.openAIProvider.startOAuth({
+        onTokensUpdated: async (newTokens) => {
+          await this.context.secrets.store('archon.openaiTokens', JSON.stringify(newTokens));
+        },
+        openBrowser: async (url) => {
+          await vscode.env.openExternal(vscode.Uri.parse(url));
+        },
+        onError: (error) => {
+          this.postMessage({ type: 'openaiAuthStatus', mode: 'subscription', authenticated: false, error });
+        },
+      });
+      this.context.globalState.update('archon.openaiAuthMode', 'subscription');
+      this.sendOpenAIAuthStatus();
+      if (this.providerManager.getActiveId() === 'openai') {
+        await this.loadModels();
+      }
+      await this.sendProvidersList();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'openaiAuthStatus', mode: 'subscription', authenticated: false, error: msg });
+    }
+  }
+
+  async disconnectOpenAI(): Promise<void> {
+    this.openAIProvider.stopRefreshManager();
+    await this.context.secrets.delete('archon.openaiTokens');
+    this.sendOpenAIAuthStatus();
+    await this.sendProvidersList();
+  }
+
+  private sendOpenAIAuthStatus(): void {
+    const mode = this.openAIProvider.getAuthMode();
+    const info = this.openAIProvider.getSubscriptionInfo();
+    const authenticated = mode === 'subscription' ? info != null : true; // API key presence checked via isAvailable
+    this.postMessage({
+      type: 'openaiAuthStatus',
+      mode,
+      authenticated,
+      planType: info?.planType,
+      email: info?.email,
+    });
+  }
+
   setSecurityLevel(level: SecurityLevel): void {
     this.securityManager.setLevel(level);
     this.context.globalState.update('archon.securityLevel', level);
@@ -561,7 +649,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const braveKey = await this.context.secrets.get('archon.braveApiKey');
         const webSearchEnabled = this.context.globalState.get<boolean>('archon.webSearchEnabled', true);
         const activeProvider = this.providerManager.getActiveId();
-        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled, activeProvider });
+        const cliPath = this.context.globalState.get<string>('archon.claudeCliPath', 'claude');
+        const mcpPath = this.context.globalState.get<string>('archon.mcpConfigPath', '');
+        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled, activeProvider, claudeCliPath: cliPath, mcpConfigPath: mcpPath || undefined });
         break;
       }
       case 'setBraveApiKey':
@@ -691,6 +781,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case 'setMcpConfigPath':
         this.context.globalState.update('archon.mcpConfigPath', msg.path || undefined);
+        break;
+      // OpenAI
+      case 'setOpenAIApiKey':
+        this.openAIProvider.setApiKey(msg.key);
+        await this.context.secrets.store('archon.openaiApiKey', msg.key);
+        this.context.globalState.update('archon.openaiAuthMode', 'api-key');
+        this.sendOpenAIAuthStatus();
+        if (this.providerManager.getActiveId() === 'openai') {
+          await this.loadModels();
+        }
+        await this.sendProvidersList();
+        break;
+      case 'setOpenAIAuthMode':
+        this.openAIProvider.setAuthMode(msg.mode as OpenAIAuthMode);
+        this.context.globalState.update('archon.openaiAuthMode', msg.mode);
+        this.sendOpenAIAuthStatus();
+        if (this.providerManager.getActiveId() === 'openai') {
+          await this.loadModels();
+        }
+        break;
+      case 'startOpenAIOAuth':
+        await this.startOpenAIOAuth();
+        break;
+      case 'disconnectOpenAI':
+        await this.disconnectOpenAI();
         break;
       case 'compressContext':
         if (this.contextManager) {
@@ -1076,6 +1191,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       version: cliStatus.version,
       error: cliStatus.error,
     });
+
+    // Also send OpenAI auth status
+    this.sendOpenAIAuthStatus();
   }
 
   private async handleUserMessage(content: string, attachments?: import('@archon/core').Attachment[]): Promise<void> {
@@ -1439,7 +1557,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    // ── OpenRouter execution path (existing pipeline-based flow) ──
+    // ── API-based execution path (OpenRouter / OpenAI — pipeline-based flow) ──
+    // Select the right streaming client based on active provider
+    const llmClient = activeProviderId === 'openai'
+      ? this.openAIProvider.getClient()
+      : this.openRouterProvider.getClient();
+
     const pipeline = await this.getSelectedPipeline();
 
     // Build conversation history for multi-turn continuity
@@ -1461,7 +1584,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Create a PipelineExecutor that bridges to the existing infrastructure
     this.pipelineExecutor = new PipelineExecutor(
       {
-        client: this.openRouterProvider.getClient(),
+        client: llmClient,
         tools: allTools,
         toolContext,
         defaultModel: this.selectedModelId,

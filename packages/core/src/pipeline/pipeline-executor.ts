@@ -17,8 +17,7 @@ import type {
   ToolNodeConfig,
 } from './types';
 import { AgentLoop } from '../agent/agent-loop';
-import type { AgentLoopHooks } from '../agent/agent-loop';
-import { OpenRouterClient } from '../models/openrouter-client';
+import type { AgentLoopHooks, StreamingLLMClient } from '../agent/agent-loop';
 import type {
   ToolContext,
   ToolDefinition,
@@ -34,8 +33,8 @@ import type {
 // ── Configuration ──
 
 export interface PipelineExecutorConfig {
-  /** OpenRouter client for LLM calls */
-  client: OpenRouterClient;
+  /** LLM client for streaming chat completions */
+  client: StreamingLLMClient;
 
   /** All available tools (core + LSP + extended) */
   tools: ToolDefinition[];
