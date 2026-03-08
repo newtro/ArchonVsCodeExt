@@ -30,13 +30,15 @@ import {
 } from '@archon/core';
 import type { HookConfiguration, HookChain, HookTemplate } from '@archon/core';
 import type { OpenAITokens, OpenAIAuthMode } from '@archon/core';
-import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput, ProviderId, ProviderInfo } from '@archon/core';
+import type { SkillLoaderConfig, SkillInfo, AskUserOptionInput, ProviderId, ProviderInfo, LLMProvider } from '@archon/core';
 import {
   MemoryDatabase, CodebaseIndexer, ApiEmbeddingProvider,
   GraphBuilder, SessionMemory, InteractionArchive,
   ContextManager, AutoSummarizer, EditTracker, MemoryTelemetry,
   RulesEngine, DependencyAwareness,
+  DEFAULT_LAYER_CONFIG,
 } from '@archon/memory';
+import type { LayerConfig, AssembledContext } from '@archon/memory';
 import type {
   WebviewMessage,
   ExtensionMessage,
@@ -121,6 +123,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private currentTodoList: TodoList | null = null;
   private todoStatusBarItem: vscode.StatusBarItem;
   private hookEngine: HookEngine;
+  private memoryProviderId: string | null = null;
+  private memoryModelId: string | null = null;
+  private agentModifiedFiles = new Map<string, string>(); // path → agent's content after write
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -231,15 +236,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         );
         this.editTracker = new EditTracker(this.memoryDb, this.sessionMemory);
         this.sessionMemory.applyDecay();
+
+        // Wire memory LLM provider if configured
+        this.initializeMemoryLlm().catch(() => {});
       } catch (e) {
         console.warn('Archon: Memory system unavailable (native modules not found). Running without persistent memory.', e);
       }
 
-      // File watcher: decay memories and re-index graph on save
+      // File watcher: decay memories, re-index graph, track edits
       this.fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx,py,rs,go,java,cs,css,html}');
       this.fileWatcher.onDidChange((uri) => {
         const relPath = vscode.workspace.asRelativePath(uri);
         this.autoSummarizer?.decayForFileChange(relPath);
+        // Re-index graph for changed file
+        this.graphBuilder?.indexFile(uri.fsPath).catch(() => {});
+        // Edit tracking: check if user modified an agent-written file
+        const agentVersion = this.agentModifiedFiles.get(relPath);
+        if (agentVersion && this.editTracker) {
+          try {
+            const userVersion = fs.readFileSync(uri.fsPath, 'utf-8');
+            if (userVersion !== agentVersion) {
+              this.editTracker.observe(relPath, agentVersion, userVersion);
+              this.agentModifiedFiles.delete(relPath);
+            }
+          } catch { /* file read error — skip */ }
+        }
       });
       context.subscriptions.push(this.fileWatcher);
     }
@@ -367,6 +388,51 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return prompt;
   }
 
+  /** Assemble memory context and append it to the base system prompt. */
+  private async buildSystemPromptWithMemory(
+    workspaceRoot: string,
+    query: string,
+    options?: { skipSkills?: boolean },
+  ): Promise<string> {
+    let prompt = this.buildSystemPrompt(workspaceRoot, options);
+
+    if (!this.contextManager) return prompt;
+
+    const layers = this.getLayerConfig();
+    const activeFiles = vscode.window.visibleTextEditors
+      .map(e => vscode.workspace.asRelativePath(e.document.uri))
+      .filter(p => !p.startsWith('extension-output'));
+
+    try {
+      const assembled = await this.contextManager.assembleContext(
+        query, activeFiles, prompt, layers,
+      );
+      // assembleContext already includes the system prompt as the first item.
+      // Rebuild from assembled items to get the token-budgeted result.
+      const memoryParts: string[] = [];
+      for (const item of assembled.items) {
+        if (item.category === 'system_prompt') continue; // already in prompt
+        memoryParts.push(item.content);
+      }
+      if (memoryParts.length > 0) {
+        prompt += '\n\n## Memory Context\n\n' + memoryParts.join('\n\n');
+      }
+
+      // Send context preview to webview
+      const preview: Record<string, number> = {};
+      for (const item of assembled.items) {
+        if (item.category === 'system_prompt') continue;
+        preview[item.category] = (preview[item.category] ?? 0) + item.tokens;
+      }
+      preview._total = assembled.totalTokens;
+      this.postMessage({ type: 'contextPreview', preview });
+    } catch (err) {
+      console.warn('Archon: assembleContext failed, using base prompt', err);
+    }
+
+    return prompt;
+  }
+
   /** Load CLAUDE.md from the workspace root (or empty string if not found). */
   private loadProjectContext(workspaceRoot: string): string {
     const claudeMdPath = path.join(workspaceRoot, 'CLAUDE.md');
@@ -378,6 +444,97 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // Ignore read errors
     }
     return '';
+  }
+
+  /** Initialize the memory LLM from saved config or auto-detect from available providers. */
+  private async initializeMemoryLlm(): Promise<void> {
+    const saved = this.context.globalState.get<{ provider: string; modelId: string }>('archon.memoryLlmConfig');
+    if (saved) {
+      this.memoryProviderId = saved.provider;
+      this.memoryModelId = saved.modelId;
+    } else {
+      // Auto-detect: pick the first available provider
+      const providers: Array<{ id: string; provider: LLMProvider; defaultModel: string }> = [
+        { id: 'openrouter', provider: this.openRouterProvider, defaultModel: 'google/gemini-2.0-flash-001' },
+        { id: 'openai', provider: this.openAIProvider, defaultModel: 'gpt-4.1-nano' },
+        { id: 'claude-cli', provider: this.claudeCliProvider, defaultModel: 'claude-haiku-4-5-20251001' },
+      ];
+      for (const { id, provider, defaultModel } of providers) {
+        try {
+          if (await provider.isAvailable()) {
+            this.memoryProviderId = id;
+            this.memoryModelId = defaultModel;
+            await this.context.globalState.update('archon.memoryLlmConfig', {
+              provider: id,
+              modelId: defaultModel,
+            });
+            break;
+          }
+        } catch { /* skip unavailable */ }
+      }
+    }
+
+    this.wireMemoryLlmFn();
+  }
+
+  /** Look up the memory provider instance and wire its simpleChat into AutoSummarizer/EditTracker. */
+  private wireMemoryLlmFn(): void {
+    if (!this.memoryProviderId || !this.memoryModelId) return;
+    const model = this.memoryModelId;
+
+    // Ollama uses direct HTTP — not a registered LLMProvider
+    if (this.memoryProviderId === 'ollama') {
+      const fn = async (systemPrompt: string, userMessage: string): Promise<string> => {
+        const res = await fetch('http://localhost:11434/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userMessage },
+            ],
+            stream: false,
+            options: { temperature: 0.3 },
+          }),
+        });
+        if (!res.ok) throw new Error(`Ollama error: ${res.status}`);
+        const data = await res.json() as { message?: { content?: string } };
+        return data.message?.content ?? '';
+      };
+      this.autoSummarizer?.setLlmFn(fn);
+      this.editTracker?.setLlmFn(fn);
+      return;
+    }
+
+    const provider = this.getProviderById(this.memoryProviderId);
+    if (!provider?.simpleChat) return;
+    const fn = async (systemPrompt: string, userMessage: string): Promise<string> => {
+      return provider.simpleChat!(model, [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ], 0.3);
+    };
+    this.autoSummarizer?.setLlmFn(fn);
+    this.editTracker?.setLlmFn(fn);
+  }
+
+  /** Get a provider instance by ID. */
+  private getProviderById(id: string): LLMProvider | null {
+    switch (id) {
+      case 'openrouter': return this.openRouterProvider;
+      case 'openai': return this.openAIProvider;
+      case 'claude-cli': return this.claudeCliProvider;
+      default: return null;
+    }
+  }
+
+  /** Read the user's layer toggle state from workspaceState. */
+  private getLayerConfig(): LayerConfig {
+    return this.context.workspaceState.get<LayerConfig>(
+      'archon.memoryLayerConfig',
+      DEFAULT_LAYER_CONFIG,
+    );
   }
 
   /**
@@ -588,6 +745,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'loadModels':
         await this.loadModels();
         break;
+      case 'loadOpenRouterModels': {
+        try {
+          // Ensure the provider has its API key (may not be set if another provider is active)
+          const orApiKey = await this.context.secrets.get('archon.openRouterApiKey');
+          if (orApiKey) {
+            this.openRouterProvider.setApiKey(orApiKey);
+          }
+          const orModels = await this.openRouterProvider.getModels();
+          orModels.sort((a, b) => a.name.localeCompare(b.name));
+          this.postMessage({ type: 'openRouterModelsLoaded', models: orModels });
+        } catch { /* OpenRouter not available */ }
+        break;
+      }
       case 'newChat':
         // Reject any pending ask_user promises so they don't leak into the next chat
         for (const [id, pending] of this.pendingAskUser) {
@@ -859,7 +1029,356 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'importHookConfig':
         this.importHookConfig();
         break;
+
+      // ── Memory Model Configuration ──
+      case 'setMemoryModelConfig': {
+        console.log('[Archon] setMemoryModelConfig — saving:', msg.config.provider, msg.config.modelId);
+        this.memoryProviderId = msg.config.provider;
+        this.memoryModelId = msg.config.modelId;
+        await this.context.globalState.update('archon.memoryLlmConfig', {
+          provider: msg.config.provider,
+          modelId: msg.config.modelId,
+        });
+        this.wireMemoryLlmFn();
+        const isConfigured = msg.config.provider === 'ollama'
+          || (this.getProviderById(msg.config.provider)?.simpleChat != null);
+        this.postMessage({
+          type: 'memoryModelStatus',
+          configured: isConfigured,
+          provider: msg.config.provider,
+          model: msg.config.modelId,
+        });
+        break;
+      }
+      case 'testMemoryModel': {
+        if (!this.memoryProviderId || !this.memoryModelId) {
+          this.postMessage({ type: 'memoryTestResult', ok: false, error: 'No memory model configured' });
+          break;
+        }
+        try {
+          // Use the same wiring as wireMemoryLlmFn
+          if (this.memoryProviderId === 'ollama') {
+            const res = await fetch('http://localhost:11434/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: this.memoryModelId,
+                messages: [{ role: 'user', content: 'Reply with "ok".' }],
+                stream: false,
+              }),
+            });
+            if (!res.ok) throw new Error(`Ollama error: ${res.status}`);
+            this.postMessage({ type: 'memoryTestResult', ok: true });
+          } else {
+            const testProvider = this.getProviderById(this.memoryProviderId);
+            if (!testProvider?.simpleChat) {
+              this.postMessage({ type: 'memoryTestResult', ok: false, error: `Provider ${this.memoryProviderId} does not support simple chat` });
+              break;
+            }
+            const result = await testProvider.simpleChat(this.memoryModelId, [
+              { role: 'system', content: 'You are a test assistant.' },
+              { role: 'user', content: 'Reply with "ok".' },
+            ], 0.1);
+            this.postMessage({ type: 'memoryTestResult', ok: result.length > 0 });
+          }
+        } catch (err) {
+          this.postMessage({ type: 'memoryTestResult', ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+        break;
+      }
+      case 'loadMemoryConfig': {
+        // Read saved config directly from globalState (don't rely on instance fields
+        // which may not be set yet if initializeMemoryLlm is still running)
+        const savedMemConfig = this.context.globalState.get<{ provider: string; modelId: string }>('archon.memoryLlmConfig');
+        console.log('[Archon] loadMemoryConfig — globalState:', savedMemConfig, '— instance:', this.memoryProviderId, this.memoryModelId);
+        const memConfig = savedMemConfig ? {
+          provider: savedMemConfig.provider,
+          modelId: savedMemConfig.modelId,
+          hasApiKey: true, // auth is handled by the provider
+        } : null;
+        const layers = this.getLayerConfig();
+        const layerToggles: Record<string, { inject: boolean; record: boolean }> = {};
+        for (const [key, val] of Object.entries(layers)) {
+          layerToggles[key] = { inject: val, record: true };
+        }
+        // Check which providers are actually available and get their model lists
+        const availableProviders: Array<{ id: string; label: string; models: string[] }> = [];
+        const providerChecks: Array<{ id: string; label: string; provider: LLMProvider }> = [
+          { id: 'openrouter', label: 'OpenRouter', provider: this.openRouterProvider },
+          { id: 'openai', label: 'OpenAI', provider: this.openAIProvider },
+          { id: 'claude-cli', label: 'Claude Code CLI', provider: this.claudeCliProvider },
+        ];
+        for (const check of providerChecks) {
+          try {
+            if (await check.provider.isAvailable()) {
+              const modelInfos = await check.provider.getModels();
+              const modelIds = modelInfos.map(m => m.id);
+              availableProviders.push({ id: check.id, label: check.label, models: modelIds });
+            }
+          } catch { /* skip unavailable */ }
+        }
+        // Check Ollama (not a registered LLMProvider — direct HTTP check)
+        try {
+          const ctrl = new AbortController();
+          const to = setTimeout(() => ctrl.abort(), 2000);
+          const ollamaRes = await fetch('http://localhost:11434/api/tags', { signal: ctrl.signal });
+          clearTimeout(to);
+          if (ollamaRes.ok) {
+            const ollamaData = await ollamaRes.json() as { models?: Array<{ name: string }> };
+            const ollamaModels = (ollamaData.models ?? []).map((m: { name: string }) => m.name);
+            if (ollamaModels.length > 0) {
+              availableProviders.push({ id: 'ollama', label: 'Ollama (local)', models: ollamaModels });
+            }
+          }
+        } catch { /* Ollama not running */ }
+        this.postMessage({
+          type: 'memoryConfigLoaded',
+          config: memConfig,
+          layerToggles,
+          availableProviders,
+        });
+        break;
+      }
+      case 'setMemoryLayerToggle': {
+        // For now, 'inject' mode maps to the LayerConfig boolean (read path).
+        // 'record' mode will be wired in Phase 4 (write path toggles).
+        if (msg.mode === 'inject') {
+          const current = this.getLayerConfig();
+          const updated = { ...current, [msg.layer]: msg.enabled };
+          await this.context.workspaceState.update('archon.memoryLayerConfig', updated);
+        }
+        break;
+      }
+      case 'requestContextPreview': {
+        if (this.contextManager) {
+          const preview = this.contextManager.previewContext(this.getLayerConfig());
+          this.postMessage({ type: 'contextPreview', preview });
+        }
+        break;
+      }
+
+      // ── Memory Dashboard CRUD ──
+      case 'loadMemorySessions': {
+        if (this.sessionMemory) {
+          const sessions = this.sessionMemory.getSessions().map(s => ({
+            id: s.id,
+            timestamp: s.timestamp,
+            confidence: s.confidence,
+            decisions: s.decisions,
+            filesModified: (s.filesModified ?? []).map((f: string | { path: string; reason: string }) =>
+              typeof f === 'string' ? { path: f, reason: '' } : f,
+            ),
+            patternsDiscovered: s.patternsDiscovered,
+            openItems: s.openItems,
+            pinned: s.confidence >= 1.0,
+          }));
+          this.postMessage({ type: 'memorySessionsLoaded', sessions });
+        }
+        break;
+      }
+      case 'deleteMemorySession':
+        this.sessionMemory?.deleteSessionById(msg.sessionId);
+        break;
+      case 'pinMemorySession':
+        this.sessionMemory?.pinSession(msg.sessionId, msg.pinned);
+        break;
+      case 'boostMemorySession':
+        this.sessionMemory?.boostSession(msg.sessionId, msg.delta);
+        break;
+      case 'loadMemoryPreferences': {
+        if (this.sessionMemory) {
+          const preferences = this.sessionMemory.getAllPreferences().map(p => ({
+            id: p.id,
+            pattern: p.pattern,
+            description: p.description,
+            occurrences: p.occurrences,
+            autoApplied: p.autoApplied,
+            confidence: p.confidence,
+          }));
+          this.postMessage({ type: 'memoryPreferencesLoaded', preferences });
+        }
+        break;
+      }
+      case 'deleteMemoryPreference':
+        this.sessionMemory?.deletePreference((msg as { type: string; preferenceId: string }).preferenceId);
+        break;
+      case 'togglePreferenceAutoApply': {
+        const taMsg = msg as { type: string; preferenceId: string; autoApply: boolean };
+        this.sessionMemory?.togglePreferenceAutoApply(taMsg.preferenceId, taMsg.autoApply);
+        break;
+      }
+      case 'loadMemoryRules': {
+        if (this.rulesEngine) {
+          const rules = this.rulesEngine.getRulesForContext().map(r => ({
+            id: r.id,
+            name: path.basename(r.filePath),
+            mode: r.mode,
+            fileMatch: r.fileMatch,
+            contentPreview: r.content.slice(0, 200),
+          }));
+          this.postMessage({ type: 'memoryRulesLoaded', rules });
+        }
+        break;
+      }
+      case 'createMemoryRule': {
+        const crMsg = msg as { type: string; name: string; content: string; mode?: string; fileMatch?: string };
+        if (this.rulesEngine) {
+          await this.rulesEngine.createRule(crMsg.name, crMsg.content, (crMsg.mode as 'always' | 'manual') ?? 'always', crMsg.fileMatch);
+        }
+        break;
+      }
+      case 'updateMemoryRule': {
+        const urMsg = msg as { type: string; ruleId: string; updates: { content?: string; mode?: string; fileMatch?: string } };
+        if (this.rulesEngine) {
+          await this.rulesEngine.updateRule(urMsg.ruleId, {
+            content: urMsg.updates.content,
+            mode: urMsg.updates.mode as 'always' | 'manual' | undefined,
+            fileMatch: urMsg.updates.fileMatch,
+          });
+        }
+        break;
+      }
+      case 'deleteMemoryRule': {
+        const drMsg = msg as { type: string; ruleId: string };
+        if (this.rulesEngine) {
+          await this.rulesEngine.deleteRule(drMsg.ruleId);
+        }
+        break;
+      }
+      case 'promotePreferenceToRule': {
+        const ppMsg = msg as { type: string; preferenceId: string };
+        if (this.sessionMemory && this.rulesEngine) {
+          const prefs = this.sessionMemory.getAllPreferences();
+          const pref = prefs.find(p => p.id === ppMsg.preferenceId);
+          if (pref) {
+            await this.rulesEngine.createRule(
+              `pref-${pref.pattern.replace(/\s+/g, '-').slice(0, 30)}`,
+              `# Learned Preference\n\n${pref.description}\n\nPattern: ${pref.pattern}\nConfidence: ${pref.confidence}\nOccurrences: ${pref.occurrences}`,
+            );
+          }
+        }
+        break;
+      }
+      case 'loadMemoryDashboard':
+      case 'updateMemorySession':
+      case 'cleanupMemorySessions':
+      case 'saveMemory':
+        break;
     }
+  }
+
+  /**
+   * Progressive auto-compaction — check context utilization and compact as needed.
+   * Stage 1 (70%): observation masking
+   * Stage 2 (85%): LLM summarization of older messages
+   * Stage 3 (95%): session summary + reset
+   */
+  private async checkAutoCompaction(): Promise<void> {
+    if (!this.contextManager) return;
+
+    const health = this.contextManager.getQuickHealth();
+    const util = health.utilization;
+
+    if (util < 70) return;
+
+    // Stage 1: Observation masking (70-85%)
+    if (util >= 70 && util < 85) {
+      const saved = this.contextManager.compressHistory();
+      if (saved > 0) {
+        this.sendContextMeterUpdate();
+        this.postMessage({
+          type: 'streamToken',
+          token: { type: 'text', content: `\n\n---\n*Context compacted: ${saved} tokens freed via observation masking.*\n---\n\n` },
+        });
+      }
+      return;
+    }
+
+    // Stage 2: LLM summarization (85-95%)
+    if (util >= 85 && util < 95) {
+      this.postMessage({ type: 'compactionStarted' });
+      const saved = this.contextManager.compressHistory();
+      let summarizedCount = 0;
+
+      // If we have a memory LLM, try to summarize older messages
+      if (this.autoSummarizer?.isReady()) {
+        const history = this.contextManager.getHistory();
+        const olderMessages = history.slice(0, Math.max(0, history.length - 5));
+        summarizedCount = olderMessages.length;
+        if (olderMessages.length > 0) {
+          await this.autoSummarizer.summarizeSession(
+            olderMessages.map(m => ({ role: m.role, content: m.content })),
+          );
+        }
+      }
+
+      this.sendContextMeterUpdate();
+      const updatedHealth = this.contextManager.getQuickHealth();
+      this.postMessage({
+        type: 'compactionComplete',
+        stats: {
+          tokensBefore: health.totalTokens,
+          tokensAfter: updatedHealth.totalTokens,
+          messagesCompressed: summarizedCount,
+          toolResultsMasked: saved,
+        },
+      });
+      this.postMessage({
+        type: 'streamToken',
+        token: { type: 'text', content: `\n\n---\n*Context compacted: ${health.totalTokens - updatedHealth.totalTokens} tokens freed via summarization. Utilization: ${updatedHealth.utilization.toFixed(0)}%.*\n---\n\n` },
+      });
+      return;
+    }
+
+    // Stage 3: Session summary + reset (95%+)
+    if (util >= 95) {
+      this.postMessage({ type: 'compactionStarted' });
+
+      // Create session summary before reset
+      if (this.autoSummarizer?.isReady()) {
+        const history = this.contextManager.getHistory();
+        await this.autoSummarizer.summarizeSession(
+          history.map(m => ({ role: m.role, content: m.content })),
+        );
+      }
+
+      this.contextManager.clearHistory();
+      this.sendContextMeterUpdate();
+
+      this.postMessage({
+        type: 'compactionComplete',
+        stats: {
+          tokensBefore: health.totalTokens,
+          tokensAfter: 0,
+          messagesCompressed: health.breakdown.reduce((s, b) => s + b.itemCount, 0),
+          toolResultsMasked: 0,
+        },
+      });
+      this.postMessage({
+        type: 'streamToken',
+        token: { type: 'text', content: `\n\n---\n*Context limit reached. Session summarized and context reset. Previous context has been saved to session memory.*\n---\n\n` },
+      });
+    }
+  }
+
+  /** Trigger auto-summarization after a completed agent turn. */
+  private triggerAutoSummarize(): void {
+    if (!this.autoSummarizer?.isReady()) return;
+
+    // Gather messages from the agent loop or context manager
+    const messages: Array<{ role: string; content: string }> = [];
+    if (this.agentLoop) {
+      for (const m of this.agentLoop.getMessages()) {
+        if (typeof m.content === 'string') {
+          messages.push({ role: m.role, content: m.content });
+        }
+      }
+    }
+    if (messages.length < 2) return; // Not enough to summarize
+
+    this.autoSummarizer.summarizeSession(messages).catch((err) => {
+      console.warn('Archon: Auto-summarization failed', err);
+    });
   }
 
   /** Send current context meter data to the webview. */
@@ -1424,9 +1943,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (activeProviderId === 'claude-cli') {
       const secLevel = this.context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict';
       const mcpConfigPath = this.context.globalState.get<string>('archon.mcpConfigPath');
+      const cliSystemPrompt = await this.buildSystemPromptWithMemory(workspaceRoot, content, { skipSkills: true });
       const executor = this.claudeCliProvider.createExecutor({
         model: this.selectedModelId,
-        systemPrompt: this.buildSystemPrompt(workspaceRoot, { skipSkills: true }),
+        systemPrompt: cliSystemPrompt,
         tools: allTools,
         toolContext,
         temperature: undefined,
@@ -1515,6 +2035,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             if (this.contextManager) {
               this.contextManager.addMessage('tool', result.content.slice(0, 2000));
               this.sendContextMeterUpdate();
+              this.checkAutoCompaction().catch(() => {});
             }
             if (this.interactionArchive) {
               this.interactionArchive.add('tool_result', result.content.slice(0, 1000), {
@@ -1527,6 +2048,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             if (msg.role === 'assistant' && this.contextManager) {
               this.contextManager.addMessage('assistant', msg.content);
               this.sendContextMeterUpdate();
+              this.checkAutoCompaction().catch(() => {});
             }
             if (msg.role === 'assistant' && this.interactionArchive) {
               this.interactionArchive.add('assistant_message', msg.content);
@@ -1551,6 +2073,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } else {
           this.isRunning = false;
           this.finalizeTodos();
+          this.triggerAutoSummarize();
           this.postMessage({ type: 'agentLoopDone' });
         }
       }
@@ -1582,13 +2105,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Create a PipelineExecutor that bridges to the existing infrastructure
+    const apiSystemPrompt = await this.buildSystemPromptWithMemory(workspaceRoot, content);
     this.pipelineExecutor = new PipelineExecutor(
       {
         client: llmClient,
         tools: allTools,
         toolContext,
         defaultModel: this.selectedModelId,
-        defaultSystemPrompt: this.buildSystemPrompt(workspaceRoot),
+        defaultSystemPrompt: apiSystemPrompt,
         projectContext: this.loadProjectContext(workspaceRoot),
         webSearch: webSearchEnabled,
         conversationHistory,
@@ -1607,6 +2131,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (this.contextManager) {
             this.contextManager.addMessage('tool', result.content.slice(0, 2000));
             this.sendContextMeterUpdate();
+            this.checkAutoCompaction().catch(() => {});
           }
           if (this.interactionArchive) {
             this.interactionArchive.add('tool_result', result.content.slice(0, 1000), {
@@ -1619,6 +2144,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (msg.role === 'assistant' && this.contextManager) {
             this.contextManager.addMessage('assistant', msg.content);
             this.sendContextMeterUpdate();
+            this.checkAutoCompaction().catch(() => {});
           }
           if (msg.role === 'assistant' && this.interactionArchive) {
             this.interactionArchive.add('assistant_message', msg.content);
@@ -1689,6 +2215,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.isRunning = false;
       this.pipelineExecutor = undefined;
       this.finalizeTodos();
+      this.triggerAutoSummarize();
       this.postMessage({ type: 'agentLoopDone' });
     }
   }
@@ -1734,6 +2261,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           edit.createFile(uri, { contents: Buffer.from(content, 'utf-8') });
           await vscode.workspace.applyEdit(edit);
         }
+        // Track agent-written content for edit tracking
+        const relPath = vscode.workspace.asRelativePath(uri);
+        this.agentModifiedFiles.set(relPath, content);
       },
       executeCommand: async (command: string) => {
         // Security gate for terminal commands

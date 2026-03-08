@@ -2,9 +2,9 @@
  * Settings Panel — UI for all Archon configuration.
  */
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { postMessage } from '../vscode-api';
-import type { ModelInfo } from '@archon/core';
+import type { ModelInfo, MemoryModelConfig, MemoryAvailableProvider } from '@archon/core';
 
 interface Props {
   currentModel: string;
@@ -27,6 +27,9 @@ interface Props {
   mcpConfigPath: string;
   onMcpConfigPathChange: (path: string) => void;
   openaiAuthStatus?: { mode: string; authenticated: boolean; planType?: string; email?: string; error?: string };
+  memoryModelConfig?: MemoryModelConfig | null;
+  memoryModelStatus?: { configured: boolean; provider?: string; model?: string; error?: string };
+  memoryAvailableProviders: MemoryAvailableProvider[];
 }
 
 export function SettingsPanel({
@@ -50,6 +53,9 @@ export function SettingsPanel({
   mcpConfigPath,
   onMcpConfigPathChange,
   openaiAuthStatus,
+  memoryModelConfig,
+  memoryModelStatus,
+  memoryAvailableProviders,
 }: Props) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [braveKeyInput, setBraveKeyInput] = useState('');
@@ -61,12 +67,35 @@ export function SettingsPanel({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Memory model state
+  const [memProvider, setMemProvider] = useState<string>(memoryModelConfig?.provider ?? '');
+  const [memModelId, setMemModelId] = useState(memoryModelConfig?.modelId ?? '');
+  const [memBaseUrl, setMemBaseUrl] = useState(memoryModelConfig?.baseUrl ?? 'http://localhost:11434');
+  const [memTestResult, setMemTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [memTesting, setMemTesting] = useState(false);
+  const memConfigLoaded = useRef(false);
+
   // Sync auth mode when status comes in from extension
   useEffect(() => {
     if (openaiAuthStatus?.mode === 'api-key' || openaiAuthStatus?.mode === 'subscription') {
       setOpenaiAuthMode(openaiAuthStatus.mode);
     }
   }, [openaiAuthStatus?.mode]);
+
+  // Sync memory config from extension (initial load and subsequent updates)
+  useEffect(() => {
+    if (memoryModelConfig) {
+      setMemProvider(memoryModelConfig.provider);
+      setMemModelId(memoryModelConfig.modelId);
+      if (memoryModelConfig.baseUrl) setMemBaseUrl(memoryModelConfig.baseUrl);
+      // Mark as loaded so auto-save skips the initial sync round
+      if (!memConfigLoaded.current) {
+        // Defer setting the flag so the auto-save effect triggered by the
+        // state updates above still sees loaded=false and skips.
+        requestAnimationFrame(() => { memConfigLoaded.current = true; });
+      }
+    }
+  }, [memoryModelConfig]);
 
   const handleSetApiKey = () => {
     if (apiKeyInput.trim()) {
@@ -99,6 +128,60 @@ export function SettingsPanel({
   const handleDisconnectOpenAI = () => {
     postMessage({ type: 'disconnectOpenAI' });
   };
+
+  // When available providers load and no saved config exists, auto-select the first.
+  useEffect(() => {
+    if (memoryModelConfig?.provider) return;
+    if (!memProvider && memoryAvailableProviders.length > 0) {
+      const first = memoryAvailableProviders[0];
+      setMemProvider(first.id);
+      if (!memModelId && first.models.length > 0) {
+        setMemModelId(first.models[0]);
+      }
+      // No saved config — allow auto-save to persist the auto-selected defaults
+      memConfigLoaded.current = true;
+    }
+  }, [memoryAvailableProviders, memoryModelConfig]);
+
+  const selectedProviderModels = useMemo(() => {
+    return memoryAvailableProviders.find(p => p.id === memProvider)?.models ?? [];
+  }, [memoryAvailableProviders, memProvider]);
+
+  // Auto-save memory model config whenever provider, model, or base URL changes.
+  // Skip until after the initial config has been loaded from the extension to
+  // avoid overwriting saved config with auto-selected defaults.
+  useEffect(() => {
+    if (!memConfigLoaded.current) return;
+    if (!memProvider || !memModelId) return;
+    postMessage({
+      type: 'setMemoryModelConfig',
+      config: {
+        provider: memProvider,
+        modelId: memModelId,
+        baseUrl: memProvider === 'ollama' ? memBaseUrl : undefined,
+      },
+    });
+    setMemTestResult(null);
+  }, [memProvider, memModelId, memBaseUrl]);
+
+  const handleTestMemoryModel = useCallback(() => {
+    setMemTesting(true);
+    setMemTestResult(null);
+    postMessage({ type: 'testMemoryModel' });
+  }, []);
+
+  // Listen for test result
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      const msg = e.data;
+      if (msg.type === 'memoryTestResult') {
+        setMemTesting(false);
+        setMemTestResult({ ok: msg.ok, error: msg.error });
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
 
   // Models not yet in the pool, filtered by search
   const availableModels = useMemo(() => {
@@ -279,6 +362,93 @@ export function SettingsPanel({
               </div>
             )}
           </div>
+        )}
+      </section>
+
+      {/* Memory Model */}
+      <section className="settings-section">
+        <h4>Memory Model</h4>
+        <p className="settings-hint">
+          Small LLM used for session summarization, edit pattern extraction, and context compression.
+          Uses your existing provider API keys — no separate key needed.
+        </p>
+
+        {memoryAvailableProviders.length === 0 ? (
+          <div className="cli-status cli-status-warn">
+            No providers configured. Add an OpenRouter API key, OpenAI API key, or start Ollama above, then return here.
+          </div>
+        ) : (
+          <>
+            <div style={{ marginBottom: '8px' }}>
+              <label className="settings-label">Provider</label>
+              <select
+                className="settings-select"
+                value={memProvider}
+                onChange={(e) => {
+                  const prov = e.target.value;
+                  setMemProvider(prov);
+                  setMemTestResult(null);
+                  const provModels = memoryAvailableProviders.find(p => p.id === prov)?.models ?? [];
+                  if (provModels.length > 0) setMemModelId(provModels[0]);
+                }}
+              >
+                {memoryAvailableProviders.map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: '8px' }}>
+              <label className="settings-label">Model</label>
+              <select
+                className="settings-select"
+                value={memModelId}
+                onChange={(e) => setMemModelId(e.target.value)}
+              >
+                {selectedProviderModels.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              {memProvider === 'openai' && openaiAuthStatus?.mode === 'subscription' && (
+                <p className="settings-hint" style={{ marginTop: '4px', opacity: 0.8 }}>
+                  Using ChatGPT subscription — only subscription-supported models are shown.
+                </p>
+              )}
+            </div>
+
+            {memProvider === 'ollama' && (
+              <div style={{ marginBottom: '8px' }}>
+                <label className="settings-label">Base URL</label>
+                <input
+                  type="text"
+                  value={memBaseUrl}
+                  onChange={(e) => setMemBaseUrl(e.target.value)}
+                  placeholder="http://localhost:11434"
+                  className="settings-input"
+                />
+              </div>
+            )}
+
+            <div className="settings-row">
+              <button onClick={handleTestMemoryModel} className="settings-btn" disabled={memTesting}>
+                {memTesting ? 'Testing...' : 'Test'}
+              </button>
+            </div>
+
+            {memTestResult && (
+              <div className={`cli-status ${memTestResult.ok ? 'cli-status-ok' : 'cli-status-warn'}`}>
+                {memTestResult.ok ? 'Connection successful' : `Error: ${memTestResult.error}`}
+              </div>
+            )}
+          </>
+        )}
+
+        {memoryModelStatus && (
+          <p className="settings-hint" style={{ marginTop: '4px' }}>
+            {memoryModelStatus.configured
+              ? `Active: ${memoryModelStatus.provider}/${memoryModelStatus.model}`
+              : 'Not configured — auto-summarization and edit tracking are disabled.'}
+          </p>
         )}
       </section>
 

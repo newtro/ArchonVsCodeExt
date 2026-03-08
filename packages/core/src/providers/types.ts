@@ -45,6 +45,13 @@ export interface LLMProvider {
 
   /** Create an executor for running a conversation */
   createExecutor(config: ExecutorConfig): Executor;
+
+  /** Simple one-shot completion (used by memory system for summarization, etc.) */
+  simpleChat?(
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    temperature?: number,
+  ): Promise<string>;
 }
 
 export interface ExecutorConfig {

@@ -123,6 +123,52 @@ export class RulesEngine {
     return { id, filePath, mode, fileMatch, content };
   }
 
+  /** Create a new rule file and reload. */
+  async createRule(name: string, content: string, mode: 'always' | 'manual' = 'always', fileMatch?: string): Promise<Rule> {
+    const rulesDir = path.join(this.workspaceRoot, '.archon', 'rules');
+    if (!fs.existsSync(rulesDir)) {
+      fs.mkdirSync(rulesDir, { recursive: true });
+    }
+    const filename = name.replace(/[^a-zA-Z0-9_-]/g, '-') + '.md';
+    const filePath = path.join(rulesDir, filename);
+    const frontmatter = [
+      '---',
+      `mode: ${mode}`,
+      ...(fileMatch ? [`fileMatch: "${fileMatch}"`] : []),
+      '---',
+    ].join('\n');
+    fs.writeFileSync(filePath, `${frontmatter}\n${content}`, 'utf-8');
+    await this.loadRules();
+    return this.rules.find(r => r.id === name.replace(/[^a-zA-Z0-9_-]/g, '-'))!;
+  }
+
+  /** Update an existing rule file. */
+  async updateRule(id: string, updates: { content?: string; mode?: 'always' | 'manual'; fileMatch?: string }): Promise<void> {
+    const rule = this.rules.find(r => r.id === id);
+    if (!rule) return;
+    const mode = updates.mode ?? rule.mode;
+    const fileMatch = updates.fileMatch ?? rule.fileMatch;
+    const content = updates.content ?? rule.content;
+    const frontmatter = [
+      '---',
+      `mode: ${mode}`,
+      ...(fileMatch ? [`fileMatch: "${fileMatch}"`] : []),
+      '---',
+    ].join('\n');
+    fs.writeFileSync(rule.filePath, `${frontmatter}\n${content}`, 'utf-8');
+    await this.loadRules();
+  }
+
+  /** Delete a rule file. */
+  async deleteRule(id: string): Promise<void> {
+    const rule = this.rules.find(r => r.id === id);
+    if (!rule) return;
+    if (fs.existsSync(rule.filePath)) {
+      fs.unlinkSync(rule.filePath);
+    }
+    await this.loadRules();
+  }
+
   private matchGlob(filePath: string, pattern: string): boolean {
     // Simple glob matching (supports * and **)
     const regex = pattern

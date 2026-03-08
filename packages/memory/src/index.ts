@@ -43,7 +43,13 @@ export type {
   ContextHealth,
   ConversationMessage,
   AssembledContext,
+  LayerConfig,
 } from './context/context-manager';
+export { DEFAULT_LAYER_CONFIG } from './context/context-manager';
+
+// Memory LLM provider
+export { MemoryLlmProvider } from './providers/memory-llm-provider';
+export type { MemoryLlmConfig, MemoryLlmProviderId } from './providers/memory-llm-provider';
 
 // Dependency awareness
 export { DependencyAwareness } from './deps/dependency-awareness';

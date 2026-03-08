@@ -17,9 +17,10 @@ import { ParallelBranchGroup } from './components/ParallelBranchGroup';
 import { TodoListWidget } from './components/TodoListWidget';
 import { PlusIcon, ClipboardIcon, RefreshIcon } from './components/Icons';
 import { HooksPanel } from './components/HooksPanel';
+import { MemoryDashboard } from './components/MemoryDashboard';
 import type { ExtensionMessage, Attachment, ChatSessionMessage, BenchmarkSource, PipelineInfo, SkillInfo, SkillTemplate, SkillVersion, TodoItem, TodoSummary, ProviderInfo, ContextMeterData, HookChain, HookExecutionEvent, HookTemplate as HookTemplateType, HookPoint, HookNodeType, HookNode, VariableDefinition } from '@archon/core';
 
-type Tab = 'chat' | 'pipeline' | 'hooks' | 'skills' | 'network' | 'benchmarks' | 'settings';
+type Tab = 'chat' | 'pipeline' | 'hooks' | 'skills' | 'memory' | 'network' | 'benchmarks' | 'settings';
 
 /** All tool names available in the extension (core + LSP + extended). */
 const AVAILABLE_TOOLS = [
@@ -77,6 +78,7 @@ export function App() {
 
   // Model pool state
   const [modelPool, setModelPool] = useState<string[]>([]);
+  const [openRouterModels, setOpenRouterModels] = useState<import('@archon/core').ModelInfo[]>([]);
 
   // Provider state
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -85,6 +87,10 @@ export function App() {
   const [claudeCliStatus, setClaudeCliStatus] = useState<{ installed: boolean; authenticated: boolean; version?: string; error?: string } | undefined>(undefined);
   const [mcpConfigPath, setMcpConfigPath] = useState('');
   const [openaiAuthStatus, setOpenaiAuthStatus] = useState<{ mode: string; authenticated: boolean; planType?: string; email?: string; error?: string } | undefined>(undefined);
+  const [memoryModelConfig, setMemoryModelConfig] = useState<import('@archon/core').MemoryModelConfig | null>(null);
+  const [memoryModelStatus, setMemoryModelStatus] = useState<{ configured: boolean; provider?: string; model?: string; error?: string } | undefined>(undefined);
+  const [memoryLayerToggles, setMemoryLayerToggles] = useState<import('@archon/core').MemoryLayerToggles | null>(null);
+  const [memoryAvailableProviders, setMemoryAvailableProviders] = useState<import('@archon/core').MemoryAvailableProvider[]>([]);
 
   // Indexing state
   const [indexingStatus, setIndexingStatus] = useState<{
@@ -220,6 +226,10 @@ export function App() {
           setModels(msg.models);
           break;
 
+        case 'openRouterModelsLoaded':
+          setOpenRouterModels(msg.models);
+          break;
+
         case 'modelChanged':
           setSelectedModel(msg.modelId);
           break;
@@ -294,6 +304,18 @@ export function App() {
             email: msg.email,
             error: msg.error,
           });
+          break;
+
+        case 'memoryConfigLoaded':
+          setMemoryModelConfig(msg.config);
+          setMemoryLayerToggles(msg.layerToggles);
+          setMemoryAvailableProviders(msg.availableProviders ?? []);
+          break;
+        case 'contextPreview':
+          // Preview data available — could be displayed in memory toggle
+          break;
+        case 'memoryModelStatus':
+          setMemoryModelStatus({ configured: msg.configured, provider: msg.provider, model: msg.model, error: msg.error });
           break;
 
         case 'chatSessionsLoaded':
@@ -475,8 +497,10 @@ export function App() {
 
     if (isFirstLoad) {
       postMessage({ type: 'loadModels' });
+      postMessage({ type: 'loadOpenRouterModels' });
       postMessage({ type: 'loadSettings' });
       postMessage({ type: 'loadProviders' });
+      postMessage({ type: 'loadMemoryConfig' });
       postMessage({ type: 'searchWorkspaceFiles', query: '' });
       postMessage({ type: 'loadChatSessions' });
       postMessage({ type: 'loadPipelines' });
@@ -780,7 +804,7 @@ export function App() {
     <div className="app">
       {/* Tab bar */}
       <div className="tab-bar">
-        {(['chat', 'pipeline', 'hooks', 'skills', 'network', 'benchmarks', 'settings'] as Tab[])
+        {(['chat', 'pipeline', 'hooks', 'skills', 'memory', 'network', 'benchmarks', 'settings'] as Tab[])
           .filter(tab => !(tab === 'pipeline' && activeProviderId === 'claude-cli'))
           .map(tab => (
           <button
@@ -792,6 +816,7 @@ export function App() {
              tab === 'pipeline' ? 'Pipeline' :
              tab === 'hooks' ? 'Hooks' :
              tab === 'skills' ? 'Skills' :
+             tab === 'memory' ? 'Memory' :
              tab === 'network' ? 'Network' :
              tab === 'benchmarks' ? 'Benchmarks' : 'Settings'}
           </button>
@@ -984,6 +1009,7 @@ export function App() {
             contextMeter={contextMeter}
             onContextCompress={() => postMessage({ type: 'compressContext' })}
             onContextReset={() => postMessage({ type: 'resetContext' })}
+            memoryLayerToggles={memoryLayerToggles}
           />
         </>
       )}
@@ -1180,6 +1206,9 @@ export function App() {
         />
       )}
 
+      {/* Memory Tab */}
+      {activeTab === 'memory' && <MemoryDashboard />}
+
       {/* Settings Tab */}
       {activeTab === 'settings' && (
         <SettingsPanel
@@ -1188,7 +1217,7 @@ export function App() {
           archiveEnabled={archiveEnabled}
           onSecurityLevelChange={handleSecurityLevelChange}
           onArchiveToggle={handleArchiveToggle}
-          models={models}
+          models={openRouterModels}
           modelPool={modelPool}
           onModelPoolChange={handleModelPoolChange}
           hasBraveApiKey={hasBraveApiKey}
@@ -1211,6 +1240,9 @@ export function App() {
             postMessage({ type: 'setMcpConfigPath', path });
           }}
           openaiAuthStatus={openaiAuthStatus}
+          memoryModelConfig={memoryModelConfig}
+          memoryModelStatus={memoryModelStatus}
+          memoryAvailableProviders={memoryAvailableProviders}
         />
       )}
     </div>

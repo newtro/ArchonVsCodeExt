@@ -38,7 +38,33 @@ export type ContextCategory =
   | 'session_memory'
   | 'conversation'
   | 'current_turn'
-  | 'reserved';
+  | 'reserved'
+  | 'archive'
+  | 'preferences';
+
+/** Which memory layers are enabled for injection into the LLM prompt. */
+export interface LayerConfig {
+  claudeMd: boolean;
+  rules: boolean;
+  sessionMemory: boolean;
+  ragSearch: boolean;
+  codeGraph: boolean;
+  dependencies: boolean;
+  archive: boolean;
+  preferences: boolean;
+}
+
+/** Default: all layers enabled. */
+export const DEFAULT_LAYER_CONFIG: LayerConfig = {
+  claudeMd: true,
+  rules: true,
+  sessionMemory: true,
+  ragSearch: true,
+  codeGraph: true,
+  dependencies: true,
+  archive: true,
+  preferences: true,
+};
 
 /** Token budget configuration. */
 export interface TokenBudget {
@@ -141,13 +167,15 @@ export class ContextManager {
 
   /**
    * Assemble context for an LLM call.
-   * Gathers from all layers, ranks by relevance, fits to budget.
+   * Gathers from all enabled layers, ranks by relevance, fits to budget.
    */
   async assembleContext(
     query: string,
     activeFiles?: string[],
     systemPrompt?: string,
+    layers?: LayerConfig,
   ): Promise<AssembledContext> {
+    const cfg = layers ?? DEFAULT_LAYER_CONFIG;
     const items: ContextItem[] = [];
 
     // 1. System prompt (highest priority — always included)
@@ -163,7 +191,7 @@ export class ContextManager {
     }
 
     // 2. Rules (high priority — project conventions)
-    if (this.rulesEngine) {
+    if (cfg.rules && this.rulesEngine) {
       const rules = this.rulesEngine.getRulesForContext(activeFiles);
       const formatted = this.rulesEngine.formatRulesForPrompt(rules);
       if (formatted) {
@@ -179,7 +207,7 @@ export class ContextManager {
     }
 
     // 3. Dependencies (medium priority — version context)
-    if (this.depAwareness) {
+    if (cfg.dependencies && this.depAwareness) {
       const depText = this.depAwareness.formatForPrompt();
       if (depText) {
         items.push({
@@ -193,8 +221,8 @@ export class ContextManager {
       }
     }
 
-    // 4. Repo map (medium priority — structural overview)
-    if (this.graphBuilder && this.graphBuilder.getSymbolCount() > 0) {
+    // 4. Repo map from code graph (medium priority — structural overview)
+    if (cfg.codeGraph && this.graphBuilder && this.graphBuilder.getSymbolCount() > 0) {
       const repoMap = this.graphBuilder.generateStructuralRepoMap(this.budget.repoMap);
       if (repoMap) {
         items.push({
@@ -208,13 +236,13 @@ export class ContextManager {
       }
     }
 
-    // 5. Retrieved code context (adaptive — depends on query)
-    if (this.indexer && query) {
+    // 5. Retrieved code context via RAG (adaptive — depends on query)
+    if (cfg.ragSearch && this.indexer && query) {
       const results = await this.indexer.search(query, 10);
       let expandedFiles: string[] | undefined;
 
       // Graph expansion: pull structurally related files
-      if (this.graphBuilder && results.length > 0) {
+      if (cfg.codeGraph && this.graphBuilder && results.length > 0) {
         const retrievedFiles = [...new Set(results.map(r => r.chunk.filePath))];
         expandedFiles = this.graphBuilder.expandWithNeighbors(retrievedFiles, 3);
       }
@@ -259,7 +287,7 @@ export class ContextManager {
     }
 
     // 6. Session memory (cross-session context)
-    if (this.sessionMemory) {
+    if (cfg.sessionMemory && this.sessionMemory) {
       const memText = this.sessionMemory.formatForPrompt();
       if (memText) {
         items.push({
@@ -273,7 +301,25 @@ export class ContextManager {
       }
     }
 
-    // 7. Conversation history
+    // 7. Interaction archive search (lower priority)
+    if (cfg.archive && this.archive && query) {
+      const archiveResults = this.archive.search(query, 5);
+      if (archiveResults.length > 0) {
+        const archiveText = archiveResults
+          .map(r => `[${r.interaction.type}] ${r.interaction.content.slice(0, 200)}`)
+          .join('\n');
+        items.push({
+          id: 'archive_search',
+          category: 'archive',
+          content: `# Relevant Past Interactions\n${archiveText}`,
+          tokens: estimateTokens(archiveText) + 10,
+          relevance: 0.4,
+          source: 'interaction_archive',
+        });
+      }
+    }
+
+    // 8. Conversation history (always included)
     for (let i = 0; i < this.conversationHistory.length; i++) {
       const msg = this.conversationHistory[i];
       items.push({
@@ -412,6 +458,48 @@ export class ContextManager {
     return { ...this.budget };
   }
 
+  /**
+   * Lightweight context preview — estimates tokens per layer without full retrieval.
+   * Used for the UI preview before sending a message.
+   */
+  previewContext(layers?: LayerConfig): Record<string, number> {
+    const cfg = layers ?? DEFAULT_LAYER_CONFIG;
+    const preview: Record<string, number> = {};
+
+    if (cfg.rules && this.rulesEngine) {
+      const rules = this.rulesEngine.getRulesForContext();
+      const formatted = this.rulesEngine.formatRulesForPrompt(rules);
+      preview.rules = formatted ? estimateTokens(formatted) : 0;
+    }
+
+    if (cfg.dependencies && this.depAwareness) {
+      const depText = this.depAwareness.formatForPrompt();
+      preview.dependencies = depText ? estimateTokens(depText) : 0;
+    }
+
+    if (cfg.codeGraph && this.graphBuilder && this.graphBuilder.getSymbolCount() > 0) {
+      preview.codeGraph = Math.min(this.budget.repoMap, this.graphBuilder.getSymbolCount() * 15);
+    }
+
+    if (cfg.sessionMemory && this.sessionMemory) {
+      const memText = this.sessionMemory.formatForPrompt();
+      preview.sessionMemory = memText ? estimateTokens(memText) : 0;
+    }
+
+    if (cfg.ragSearch) {
+      preview.ragSearch = -1; // -1 = "will search" indicator (can't estimate without query)
+    }
+
+    if (cfg.archive) {
+      preview.archive = -1; // requires query
+    }
+
+    const convTokens = this.conversationHistory.reduce((sum, m) => sum + m.tokens, 0);
+    preview.conversation = convTokens;
+
+    return preview;
+  }
+
   // ── Private ──
 
   private createDefaultBudget(maxTokens: number): TokenBudget {
@@ -441,10 +529,12 @@ export class ContextManager {
       current_turn: 2,
       code_context: 3,
       session_memory: 4,
-      dependencies: 5,
-      repo_map: 6,
-      conversation: 7,
-      reserved: 8,
+      preferences: 5,
+      dependencies: 6,
+      repo_map: 7,
+      archive: 8,
+      conversation: 9,
+      reserved: 10,
     };
 
     // Sort by category priority, then by relevance within category
@@ -482,6 +572,8 @@ export class ContextManager {
       repo_map: this.budget.repoMap,
       code_context: this.budget.codeContext,
       session_memory: this.budget.sessionMemory,
+      archive: this.budget.sessionMemory, // shares session memory budget
+      preferences: this.budget.rules, // shares rules budget
       conversation: this.budget.conversation,
       current_turn: this.budget.currentTurn,
       reserved: this.budget.reserved,

@@ -10,8 +10,9 @@ import { AttachmentChip } from './AttachmentChip';
 import { FilePickerPopup } from './FilePickerPopup';
 import type { SkillPickerItem } from './SkillPickerPopup';
 import { SkillPickerPopup } from './SkillPickerPopup';
-import type { ContextMeterData } from '@archon/core';
+import type { ContextMeterData, MemoryLayerToggles } from '@archon/core';
 import { ContextMeter } from './ContextMeter';
+import { MemoryLayerToggle } from './MemoryLayerToggle';
 
 interface Props {
   onSend: (content: string, attachments: Attachment[]) => void;
@@ -36,6 +37,7 @@ interface Props {
   contextMeter?: ContextMeterData | null;
   onContextCompress?: () => void;
   onContextReset?: () => void;
+  memoryLayerToggles?: MemoryLayerToggles | null;
 }
 
 export function ChatInput({
@@ -47,6 +49,7 @@ export function ChatInput({
   providers, activeProviderId, onProviderChange,
   skills,
   contextMeter, onContextCompress, onContextReset,
+  memoryLayerToggles,
 }: Props) {
   const [input, setInput] = useState('');
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -259,6 +262,9 @@ export function ChatInput({
           </div>
 
           <div className="input-actions">
+            {memoryLayerToggles && Object.keys(memoryLayerToggles).length > 0 && (
+              <MemoryLayerToggle layerToggles={memoryLayerToggles} />
+            )}
             {contextMeter && (
               <ContextMeter
                 data={contextMeter}
