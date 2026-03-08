@@ -2436,13 +2436,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         return new Promise((resolve) => {
-          exec(command, { cwd: workspaceRoot, timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-            resolve({
-              stdout: stdout ?? '',
-              stderr: stderr ?? '',
-              exitCode: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
-            });
-          });
+          const timeout = 120000; // 2 minutes for long-running commands like git clone
+          // On macOS/Linux, use a login shell to get the user's full environment
+          // (PATH, SSH agent, etc.) which may not be available in VS Code's process.
+          const isUnix = process.platform === 'darwin' || process.platform === 'linux';
+          const shell = isUnix ? (process.env.SHELL || '/bin/sh') : undefined;
+          const execEnv = {
+            ...process.env,
+            // Prevent git from hanging on interactive credential/passphrase prompts
+            // (e.g. macOS Keychain dialog, ssh-askpass) when there's no TTY.
+            GIT_TERMINAL_PROMPT: '0',
+          };
+          const child = exec(
+            command,
+            { cwd: workspaceRoot, timeout, maxBuffer: 1024 * 1024, env: execEnv, shell },
+            (error, stdout, stderr) => {
+              let stderrOut = stderr ?? '';
+              if (error && 'killed' in error && error.killed) {
+                stderrOut = `${stderrOut}\nCommand timed out after ${timeout / 1000}s and was killed.`.trim();
+              }
+              resolve({
+                stdout: stdout ?? '',
+                stderr: stderrOut,
+                exitCode: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
+              });
+            },
+          );
+          // Close stdin so commands that read from it fail fast instead of hanging
+          child.stdin?.end();
         });
       },
       getDiagnostics: async (uriStr: string) => {
