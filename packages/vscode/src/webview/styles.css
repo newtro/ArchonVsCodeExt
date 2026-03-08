@@ -4261,6 +4261,8 @@ body {
   bottom: calc(100% + 8px);
   right: 0;
   width: 300px;
+  max-height: 60vh;
+  overflow-y: auto;
   background: var(--vscode-editorHoverWidget-background, #252526);
   border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
   border-radius: 6px;
