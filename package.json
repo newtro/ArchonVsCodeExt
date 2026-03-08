@@ -6,7 +6,8 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "test": "turbo run test",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "rebuild-native": "npx @electron/rebuild -v 25.9.8 -m node_modules/.pnpm/better-sqlite3@12.6.2/node_modules/better-sqlite3"
   },
   "devDependencies": {
     "turbo": "^2.8.0",
@@ -14,6 +15,6 @@
   },
   "packageManager": "pnpm@10.6.0",
   "pnpm": {
-    "onlyBuiltDependencies": ["@openrouter/sdk", "esbuild"]
+    "onlyBuiltDependencies": ["@openrouter/sdk", "esbuild", "better-sqlite3"]
   }
 }

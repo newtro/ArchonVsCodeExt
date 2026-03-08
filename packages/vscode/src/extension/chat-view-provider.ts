@@ -217,6 +217,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.depAwareness.scan();
 
       try {
+        console.log('[Archon] Initializing memory system for workspace:', workspaceRoot);
         this.memoryDb = new MemoryDatabase(workspaceRoot);
         this.indexer = new CodebaseIndexer(workspaceRoot, this.memoryDb);
         this.graphBuilder = new GraphBuilder(this.memoryDb);
@@ -236,13 +237,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         );
         this.editTracker = new EditTracker(this.memoryDb, this.sessionMemory);
         this.sessionMemory.applyDecay();
+        console.log('[Archon] Memory system initialized — DB, indexer, graph, sessions, summarizer, editTracker all created');
 
         // Wire memory LLM provider if configured
         this.initializeMemoryLlm().catch((err) => {
           console.warn('[Archon] Memory LLM init failed:', err);
         });
       } catch (e) {
-        console.warn('Archon: Memory system unavailable (native modules not found). Running without persistent memory.', e);
+        console.error('[Archon] Memory system FAILED to initialize:', e);
       }
 
       // File watcher: decay memories, re-index graph, track edits
@@ -1273,6 +1275,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this.graphBuilder) stats.symbols = this.graphBuilder.getSymbolCount();
         if (this.rulesEngine) stats.rules = this.rulesEngine.getRulesForContext().length;
         stats.summarizerReady = this.autoSummarizer?.isReady() ? 1 : 0;
+        // Diagnostics — which components are alive?
+        stats._hasDb = this.memoryDb ? 1 : 0;
+        stats._hasIndexer = this.indexer ? 1 : 0;
+        stats._hasGraph = this.graphBuilder ? 1 : 0;
+        stats._hasSession = this.sessionMemory ? 1 : 0;
+        stats._hasSummarizer = this.autoSummarizer ? 1 : 0;
+        console.log('[Archon] Dashboard stats:', stats);
         this.postMessage({ type: 'memoryDashboardLoaded', stats });
         break;
       }
