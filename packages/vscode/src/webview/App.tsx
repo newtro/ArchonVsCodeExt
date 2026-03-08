@@ -104,6 +104,11 @@ export function App() {
   // Context meter state
   const [contextMeter, setContextMeter] = useState<ContextMeterData | null>(null);
 
+  // Context preview + compaction state
+  const [contextPreview, setContextPreview] = useState<Record<string, number> | null>(null);
+  const [compacting, setCompacting] = useState(false);
+  const [compactionStats, setCompactionStats] = useState<import('@archon/core').CompactionStats | null>(null);
+
   // Todo display mode
   const [todoDisplayMode, setTodoDisplayMode] = useState<'pinned' | 'inline' | 'floating'>('pinned');
   const todoDisplayModeRef = React.useRef(todoDisplayMode);
@@ -312,7 +317,14 @@ export function App() {
           setMemoryAvailableProviders(msg.availableProviders ?? []);
           break;
         case 'contextPreview':
-          // Preview data available — could be displayed in memory toggle
+          setContextPreview(msg.preview);
+          break;
+        case 'compactionStarted':
+          setCompacting(true);
+          break;
+        case 'compactionComplete':
+          setCompacting(false);
+          setCompactionStats(msg.stats);
           break;
         case 'memoryModelStatus':
           setMemoryModelStatus({ configured: msg.configured, provider: msg.provider, model: msg.model, error: msg.error });
@@ -1010,6 +1022,7 @@ export function App() {
             onContextCompress={() => postMessage({ type: 'compressContext' })}
             onContextReset={() => postMessage({ type: 'resetContext' })}
             memoryLayerToggles={memoryLayerToggles}
+            contextPreview={contextPreview}
           />
         </>
       )}

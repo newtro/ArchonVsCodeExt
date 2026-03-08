@@ -126,6 +126,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private memoryProviderId: string | null = null;
   private memoryModelId: string | null = null;
   private agentModifiedFiles = new Map<string, string>(); // path → agent's content after write
+  private memoryLlmReady: Promise<void> = Promise.resolve();
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -240,7 +241,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         console.log('[Archon] Memory system initialized — DB, indexer, graph, sessions, summarizer, editTracker all created');
 
         // Wire memory LLM provider if configured
-        this.initializeMemoryLlm().catch((err) => {
+        // Use a stored promise so handleUserMessage can await it before first send
+        this.memoryLlmReady = this.initializeMemoryLlm().catch((err) => {
           console.warn('[Archon] Memory LLM init failed:', err);
         });
       } catch (e) {
@@ -253,7 +255,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const relPath = vscode.workspace.asRelativePath(uri);
         this.autoSummarizer?.decayForFileChange(relPath);
         // Re-index graph for changed file
-        this.graphBuilder?.indexFile(uri.fsPath).catch(() => {});
+        if (this.graphBuilder) {
+          try {
+            const fileContent = fs.readFileSync(uri.fsPath, 'utf-8');
+            const ext = path.extname(uri.fsPath).slice(1);
+            const langMap: Record<string, string> = {
+              ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'javascript',
+              py: 'python', rs: 'rust', go: 'go', java: 'java', cs: 'c_sharp',
+              css: 'css', html: 'html',
+            };
+            const lang = langMap[ext];
+            if (lang) {
+              const crypto = require('crypto');
+              const hash = crypto.createHash('md5').update(fileContent).digest('hex');
+              this.graphBuilder.indexFile(uri.fsPath, fileContent, lang, hash).catch(() => {});
+            }
+          } catch { /* file read error — skip */ }
+        }
         // Edit tracking: check if user modified an agent-written file
         const agentVersion = this.agentModifiedFiles.get(relPath);
         if (agentVersion && this.editTracker) {
@@ -367,12 +385,52 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         state: 'ready',
         chunkCount: this.indexer.getChunkCount(),
       });
+
+      // Background: populate code graph from indexed files
+      if (this.graphBuilder) {
+        this.buildGraphFromChunks().catch((err) => {
+          console.warn('[Archon] Background graph indexing failed:', err);
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.postMessage({ type: 'indexingStatus', state: 'error', error: msg });
     } finally {
       this.indexingInProgress = false;
     }
+  }
+
+  /**
+   * Build the code graph from already-indexed chunks.
+   * Runs in background after workspace indexing completes.
+   */
+  private async buildGraphFromChunks(): Promise<void> {
+    if (!this.graphBuilder || !this.memoryDb) return;
+    const crypto = require('crypto');
+    const db = this.memoryDb.getDb();
+    // Get distinct files from chunks table
+    const files = db.prepare('SELECT DISTINCT file_path FROM chunks').all() as Array<{ file_path: string }>;
+    const langMap: Record<string, string> = {
+      ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'javascript',
+      py: 'python', rs: 'rust', go: 'go', java: 'java', cs: 'c_sharp',
+      css: 'css', html: 'html',
+    };
+    let indexed = 0;
+    for (const { file_path: filePath } of files) {
+      try {
+        const ext = path.extname(filePath).slice(1);
+        const lang = langMap[ext];
+        if (!lang) continue;
+        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        const absPath = path.isAbsolute(filePath) ? filePath : path.join(wsRoot, filePath);
+        if (!fs.existsSync(absPath)) continue;
+        const content = fs.readFileSync(absPath, 'utf-8');
+        const hash = crypto.createHash('md5').update(content).digest('hex');
+        await this.graphBuilder!.indexFile(absPath, content, lang, hash);
+        indexed++;
+      } catch { /* skip individual file errors */ }
+    }
+    console.log(`[Archon] Graph indexing complete: ${indexed}/${files.length} files`);
   }
 
   private buildSystemPrompt(workspaceRoot: string, options?: { skipSkills?: boolean }): string {
@@ -420,6 +478,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (memoryParts.length > 0) {
         prompt += '\n\n## Memory Context\n\n' + memoryParts.join('\n\n');
+        prompt += '\n\nWhen your response draws on information from the memory context above, cite the source using [mem:ID] markers where ID matches the context item identifier. This helps the user trace where information comes from.';
       }
       console.log('[Archon] buildSystemPromptWithMemory — assembled', assembled.items.length, 'items,', memoryParts.length, 'memory parts, categories:', assembled.items.map(i => i.category).join(', '));
 
@@ -1285,10 +1344,54 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.postMessage({ type: 'memoryDashboardLoaded', stats });
         break;
       }
-      case 'updateMemorySession':
-      case 'cleanupMemorySessions':
-      case 'saveMemory':
+      case 'updateMemorySession': {
+        const usMsg = msg as { type: string; sessionId: string; updates: { decisions?: string[]; openItems?: string[] } };
+        this.sessionMemory?.updateSessionContent(usMsg.sessionId, usMsg.updates);
         break;
+      }
+      case 'cleanupMemorySessions': {
+        // Remove all unpinned sessions below confidence threshold
+        if (this.sessionMemory) {
+          const sessions = this.sessionMemory.getSessions();
+          const threshold = 0.3;
+          let removed = 0;
+          for (const s of sessions) {
+            if (s.confidence < threshold && s.confidence < 1.0) {
+              this.sessionMemory.deleteSessionById(s.id);
+              removed++;
+            }
+          }
+          console.log(`[Archon] Cleaned up ${removed} low-confidence sessions`);
+        }
+        break;
+      }
+      case 'saveMemory': {
+        // Manual "Save Memory" — trigger summarization of current conversation
+        if (this.autoSummarizer?.isReady() && this.agentLoop) {
+          const messages: Array<{ role: string; content: string }> = [];
+          for (const m of this.agentLoop.getMessages()) {
+            if (typeof m.content === 'string') {
+              messages.push({ role: m.role, content: m.content });
+            }
+          }
+          if (messages.length >= 2) {
+            this.autoSummarizer.summarizeSession(messages).then((result) => {
+              if (result) {
+                console.log('[Archon] Manual save memory — session summarized:', result.decisions?.length ?? 0, 'decisions');
+                this.postMessage({ type: 'memorySaved', success: true });
+              } else {
+                this.postMessage({ type: 'memorySaved', success: false, error: 'Summarization returned null' });
+              }
+            }).catch((err) => {
+              console.warn('[Archon] Manual save memory failed:', err);
+              this.postMessage({ type: 'memorySaved', success: false, error: String(err) });
+            });
+          }
+        } else if (!this.autoSummarizer?.isReady()) {
+          this.postMessage({ type: 'memorySaved', success: false, error: 'Memory LLM not configured' });
+        }
+        break;
+      }
     }
   }
 
@@ -1965,6 +2068,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         content = `[Skill "/${resolvedSkillName}" activated. Follow these instructions:]\n\n${skillPreamble}\n\n[End of skill instructions. Now handle the user's request below.]\n\n${userArgs}`;
       }
     }
+
+    // Ensure memory LLM is wired before first message (resolves race from constructor)
+    await this.memoryLlmReady;
 
     // Track user message in memory layers
     if (this.contextManager) {

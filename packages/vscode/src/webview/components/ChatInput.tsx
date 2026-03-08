@@ -14,6 +14,11 @@ import type { ContextMeterData, MemoryLayerToggles } from '@archon/core';
 import { ContextMeter } from './ContextMeter';
 import { MemoryLayerToggle } from './MemoryLayerToggle';
 
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(n);
+}
+
 interface Props {
   onSend: (content: string, attachments: Attachment[]) => void;
   onCancel: () => void;
@@ -38,6 +43,7 @@ interface Props {
   onContextCompress?: () => void;
   onContextReset?: () => void;
   memoryLayerToggles?: MemoryLayerToggles | null;
+  contextPreview?: Record<string, number> | null;
 }
 
 export function ChatInput({
@@ -50,6 +56,7 @@ export function ChatInput({
   skills,
   contextMeter, onContextCompress, onContextReset,
   memoryLayerToggles,
+  contextPreview,
 }: Props) {
   const [input, setInput] = useState('');
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -201,6 +208,23 @@ export function ChatInput({
                 onRemove={() => onRemoveAttachment(a.id)}
               />
             ))}
+          </div>
+        )}
+
+        {/* Context preview bar */}
+        {contextPreview && Object.keys(contextPreview).length > 0 && (
+          <div className="context-preview-bar">
+            <span className="context-preview-total">
+              ~{formatTokens(contextPreview._total ?? 0)} tokens
+            </span>
+            {Object.entries(contextPreview)
+              .filter(([k]) => !k.startsWith('_'))
+              .map(([category, tokens]) => (
+                <span key={category} className="context-preview-item" title={`${category}: ${tokens} tokens`}>
+                  {category}: {formatTokens(tokens)}
+                </span>
+              ))
+            }
           </div>
         )}
 

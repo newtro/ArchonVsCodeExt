@@ -393,6 +393,23 @@ export class SessionMemory {
     }
   }
 
+  /** Update a session's editable fields (decisions, openItems). */
+  updateSessionContent(id: string, updates: { decisions?: string[]; openItems?: string[] }): void {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (updates.decisions) {
+      sets.push('decisions = ?');
+      params.push(JSON.stringify(updates.decisions));
+    }
+    if (updates.openItems) {
+      sets.push('open_items = ?');
+      params.push(JSON.stringify(updates.openItems));
+    }
+    if (sets.length === 0) return;
+    params.push(id);
+    this.db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  }
+
   /** Boost a session's confidence by delta. */
   boostSession(id: string, delta: number): void {
     const row = this.db.prepare('SELECT confidence FROM sessions WHERE id = ?').get(id) as { confidence: number } | undefined;
