@@ -303,6 +303,7 @@ export type ExtensionMessage =
   | { type: 'memorySessionsLoaded'; sessions: MemorySessionEntry[] }
   | { type: 'memoryPreferencesLoaded'; preferences: MemoryPreferenceEntry[] }
   | { type: 'memoryRulesLoaded'; rules: MemoryRuleEntry[] }
+  | { type: 'memoryDashboardLoaded'; stats: Record<string, number> }
   | { type: 'contextPreview'; preview: Record<string, number> }
   | { type: 'compactionStarted' }
   | { type: 'compactionComplete'; stats: CompactionStats }

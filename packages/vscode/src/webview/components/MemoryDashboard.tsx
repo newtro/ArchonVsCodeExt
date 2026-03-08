@@ -8,11 +8,21 @@ import type { MemorySessionEntry, MemoryPreferenceEntry, MemoryRuleEntry } from 
 
 type Tab = 'sessions' | 'preferences' | 'rules';
 
+interface DashboardStats {
+  sessions?: number;
+  preferences?: number;
+  chunks?: number;
+  symbols?: number;
+  rules?: number;
+  summarizerReady?: number;
+}
+
 export function MemoryDashboard() {
   const [tab, setTab] = useState<Tab>('sessions');
   const [sessions, setSessions] = useState<MemorySessionEntry[]>([]);
   const [preferences, setPreferences] = useState<MemoryPreferenceEntry[]>([]);
   const [rules, setRules] = useState<MemoryRuleEntry[]>([]);
+  const [stats, setStats] = useState<DashboardStats>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,6 +38,9 @@ export function MemoryDashboard() {
         case 'memoryRulesLoaded':
           setRules(msg.rules);
           break;
+        case 'memoryDashboardLoaded':
+          setStats(msg.stats);
+          break;
       }
     };
     window.addEventListener('message', handler);
@@ -40,9 +53,10 @@ export function MemoryDashboard() {
     if (tab === 'rules') postMessage({ type: 'loadMemoryRules' });
   }, [tab]);
 
-  // Load initial data
+  // Load initial data + stats
   useEffect(() => {
     postMessage({ type: 'loadMemorySessions' });
+    postMessage({ type: 'loadMemoryDashboard' });
   }, []);
 
   const formatDate = (ts: number) => new Date(ts).toLocaleDateString(undefined, {
@@ -52,6 +66,18 @@ export function MemoryDashboard() {
   return (
     <div className="memory-dashboard">
       <h3>Memory Dashboard</h3>
+
+      {/* Overview stats */}
+      <div className="memory-stats-bar">
+        <span className="memory-stat" title="Indexed code chunks">{stats.chunks ?? 0} chunks</span>
+        <span className="memory-stat" title="Code symbols (functions, classes)">{stats.symbols ?? 0} symbols</span>
+        <span className="memory-stat" title="Session summaries">{stats.sessions ?? 0} sessions</span>
+        <span className="memory-stat" title="Learned preferences">{stats.preferences ?? 0} prefs</span>
+        <span className="memory-stat" title="Active rules">{stats.rules ?? 0} rules</span>
+        <span className={`memory-stat ${stats.summarizerReady ? 'ready' : 'not-ready'}`} title={stats.summarizerReady ? 'Summarizer active' : 'Summarizer not configured — set memory model in Settings'}>
+          {stats.summarizerReady ? 'LLM active' : 'LLM not configured'}
+        </span>
+      </div>
 
       <div className="memory-tabs">
         {(['sessions', 'preferences', 'rules'] as Tab[]).map(t => (

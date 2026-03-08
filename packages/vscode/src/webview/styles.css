@@ -4344,6 +4344,31 @@ body {
   font-size: 14px;
 }
 
+.memory-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px 8px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, #454545);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.memory-stat {
+  color: var(--vscode-descriptionForeground, #999);
+  white-space: nowrap;
+}
+
+.memory-stat.ready {
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.memory-stat.not-ready {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
 .memory-tabs {
   display: flex;
   gap: 4px;

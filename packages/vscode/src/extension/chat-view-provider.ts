@@ -238,7 +238,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sessionMemory.applyDecay();
 
         // Wire memory LLM provider if configured
-        this.initializeMemoryLlm().catch(() => {});
+        this.initializeMemoryLlm().catch((err) => {
+          console.warn('[Archon] Memory LLM init failed:', err);
+        });
       } catch (e) {
         console.warn('Archon: Memory system unavailable (native modules not found). Running without persistent memory.', e);
       }
@@ -417,6 +419,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (memoryParts.length > 0) {
         prompt += '\n\n## Memory Context\n\n' + memoryParts.join('\n\n');
       }
+      console.log('[Archon] buildSystemPromptWithMemory — assembled', assembled.items.length, 'items,', memoryParts.length, 'memory parts, categories:', assembled.items.map(i => i.category).join(', '));
 
       // Send context preview to webview
       const preview: Record<string, number> = {};
@@ -448,8 +451,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Initialize the memory LLM from saved config or auto-detect from available providers. */
   private async initializeMemoryLlm(): Promise<void> {
+    console.log('[Archon] initializeMemoryLlm — starting');
     const saved = this.context.globalState.get<{ provider: string; modelId: string }>('archon.memoryLlmConfig');
     if (saved) {
+      console.log('[Archon] initializeMemoryLlm — loaded saved config:', saved.provider, saved.modelId);
       this.memoryProviderId = saved.provider;
       this.memoryModelId = saved.modelId;
     } else {
@@ -475,6 +480,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     this.wireMemoryLlmFn();
+    console.log('[Archon] initializeMemoryLlm — done. Provider:', this.memoryProviderId, 'Model:', this.memoryModelId, 'Summarizer ready:', this.autoSummarizer?.isReady());
   }
 
   /** Look up the memory provider instance and wire its simpleChat into AutoSummarizer/EditTracker. */
@@ -1259,7 +1265,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
-      case 'loadMemoryDashboard':
+      case 'loadMemoryDashboard': {
+        const stats: Record<string, number> = {};
+        if (this.sessionMemory) stats.sessions = this.sessionMemory.getSessions().length;
+        if (this.sessionMemory) stats.preferences = this.sessionMemory.getAllPreferences().length;
+        if (this.indexer) stats.chunks = this.indexer.getChunkCount();
+        if (this.graphBuilder) stats.symbols = this.graphBuilder.getSymbolCount();
+        if (this.rulesEngine) stats.rules = this.rulesEngine.getRulesForContext().length;
+        stats.summarizerReady = this.autoSummarizer?.isReady() ? 1 : 0;
+        this.postMessage({ type: 'memoryDashboardLoaded', stats });
+        break;
+      }
       case 'updateMemorySession':
       case 'cleanupMemorySessions':
       case 'saveMemory':
@@ -1363,9 +1379,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Trigger auto-summarization after a completed agent turn. */
   private triggerAutoSummarize(): void {
-    if (!this.autoSummarizer?.isReady()) return;
+    if (!this.autoSummarizer) return;
 
-    // Gather messages from the agent loop or context manager
+    // If LLM not wired yet, try wiring now (handles race with async init)
+    if (!this.autoSummarizer.isReady()) {
+      this.wireMemoryLlmFn();
+      if (!this.autoSummarizer.isReady()) {
+        console.log('[Archon] Auto-summarize skipped: memory LLM not configured (provider:', this.memoryProviderId, ')');
+        return;
+      }
+    }
+
+    // Gather messages from the agent loop
     const messages: Array<{ role: string; content: string }> = [];
     if (this.agentLoop) {
       for (const m of this.agentLoop.getMessages()) {
@@ -1376,8 +1401,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (messages.length < 2) return; // Not enough to summarize
 
-    this.autoSummarizer.summarizeSession(messages).catch((err) => {
-      console.warn('Archon: Auto-summarization failed', err);
+    console.log('[Archon] Auto-summarizing', messages.length, 'messages...');
+    this.autoSummarizer.summarizeSession(messages).then((result) => {
+      if (result) {
+        console.log('[Archon] Session summarized:', result.decisions?.length ?? 0, 'decisions');
+      } else {
+        console.warn('[Archon] Summarization returned null (LLM response could not be parsed)');
+      }
+    }).catch((err) => {
+      console.warn('[Archon] Auto-summarization failed:', err);
     });
   }
 
