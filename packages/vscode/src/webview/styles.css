@@ -4257,9 +4257,6 @@ body {
 }
 
 .memory-toggle-popover {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
   width: 300px;
   max-height: 60vh;
   overflow-y: auto;
