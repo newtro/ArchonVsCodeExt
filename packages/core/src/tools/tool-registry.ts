@@ -711,8 +711,13 @@ Statuses: pending, in_progress, completed, error, skipped.`,
     required: ['todos'],
   },
   execute: async (args, ctx) => {
-    const rawTodos = args.todos as Array<Record<string, unknown>>;
+    // Accept both "todos" (schema) and "items" (common LLM mistake)
+    const rawTodos = (args.todos ?? args.items) as Array<Record<string, unknown>> | undefined;
     const title = args.title as string | undefined;
+
+    if (!rawTodos || !Array.isArray(rawTodos)) {
+      return 'Error: Missing "todos" array. Provide { todos: [{ id, content, status }] }';
+    }
 
     if (rawTodos.length > MAX_TODO_ITEMS) {
       return `Error: Too many items (${rawTodos.length}). Maximum is ${MAX_TODO_ITEMS}.`;

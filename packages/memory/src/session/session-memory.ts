@@ -355,4 +355,102 @@ export class SessionMemory {
   markAutoApplied(id: string): void {
     this.stmts.markAutoApplied!.run(id);
   }
+
+  /** Get all sessions (for dashboard CRUD). */
+  getSessions(): SessionSummary[] {
+    const rows = this.stmts.getAllSessions!.all() as Array<{
+      id: string;
+      timestamp: number;
+      decisions: string;
+      files_modified: string;
+      patterns_discovered: string;
+      open_items: string;
+      confidence: number;
+      last_referenced: number;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      timestamp: r.timestamp,
+      decisions: JSON.parse(r.decisions || '[]'),
+      filesModified: JSON.parse(r.files_modified || '[]'),
+      patternsDiscovered: JSON.parse(r.patterns_discovered || '[]'),
+      openItems: JSON.parse(r.open_items || '[]'),
+      confidence: r.confidence,
+      lastReferenced: r.last_referenced,
+    }));
+  }
+
+  /** Delete a session by ID. */
+  deleteSessionById(id: string): void {
+    this.stmts.deleteSession!.run(id);
+  }
+
+  /** Pin a session (set confidence to max so decay doesn't remove it). */
+  pinSession(id: string, pinned: boolean): void {
+    if (pinned) {
+      this.stmts.updateSessionConfidence!.run(1.0, Date.now(), id);
+    }
+  }
+
+  /** Update a session's editable fields (decisions, openItems). */
+  updateSessionContent(id: string, updates: { decisions?: string[]; openItems?: string[] }): void {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (updates.decisions) {
+      sets.push('decisions = ?');
+      params.push(JSON.stringify(updates.decisions));
+    }
+    if (updates.openItems) {
+      sets.push('open_items = ?');
+      params.push(JSON.stringify(updates.openItems));
+    }
+    if (sets.length === 0) return;
+    params.push(id);
+    this.db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  }
+
+  /** Boost a session's confidence by delta. */
+  boostSession(id: string, delta: number): void {
+    const row = this.db.prepare('SELECT confidence FROM sessions WHERE id = ?').get(id) as { confidence: number } | undefined;
+    if (row) {
+      const newConf = Math.min(1, Math.max(0, row.confidence + delta));
+      this.stmts.updateSessionConfidence!.run(newConf, Date.now(), id);
+    }
+  }
+
+  /** Get all preferences (for dashboard CRUD). */
+  getAllPreferences(): PreferencePattern[] {
+    const rows = this.db.prepare('SELECT * FROM preferences ORDER BY last_seen DESC').all() as Array<{
+      id: string;
+      pattern: string;
+      description: string;
+      occurrences: number;
+      first_seen: number;
+      last_seen: number;
+      auto_applied: number;
+      confidence: number;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      pattern: r.pattern,
+      description: r.description,
+      occurrences: r.occurrences,
+      firstSeen: r.first_seen,
+      lastSeen: r.last_seen,
+      autoApplied: r.auto_applied === 1,
+      confidence: r.confidence,
+    }));
+  }
+
+  /** Delete a preference by ID. */
+  deletePreference(id: string): void {
+    this.db.prepare('DELETE FROM preferences WHERE id = ?').run(id);
+  }
+
+  /** Toggle auto-applied flag on a preference. */
+  togglePreferenceAutoApply(id: string, autoApply: boolean): void {
+    this.db.prepare('UPDATE preferences SET auto_applied = ? WHERE id = ?').run(autoApply ? 1 : 0, id);
+  }
 }

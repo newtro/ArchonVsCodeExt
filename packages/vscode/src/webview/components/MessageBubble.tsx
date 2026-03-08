@@ -317,10 +317,30 @@ function SubToolCall({ summary, result, isError }: { summary: string; result?: s
   );
 }
 
+/**
+ * Replace [mem:ID] citation markers with clickable badges.
+ * Citations are injected by the context assembly pipeline when memory
+ * items are included in the LLM prompt. The LLM is instructed to cite
+ * sources using these markers.
+ */
+function renderCitations(html: string): string {
+  return html.replace(
+    /\[mem:([a-zA-Z0-9_-]+)\]/g,
+    (_match, id: string) => {
+      const label = id.startsWith('session_') ? 'session'
+        : id.startsWith('rag_') ? 'code'
+        : id.startsWith('rule_') ? 'rule'
+        : id.startsWith('pref_') ? 'pref'
+        : 'mem';
+      return `<span class="mem-citation" title="Memory source: ${escapeHtml(id)}" data-mem-id="${escapeHtml(id)}">${label}</span>`;
+    },
+  );
+}
+
 function renderMarkdown(content: string): string {
   try {
     const html = marked.parse(content);
-    if (typeof html === 'string') return html;
+    if (typeof html === 'string') return renderCitations(html);
     return content;
   } catch {
     return escapeHtml(content);

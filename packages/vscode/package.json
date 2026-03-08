@@ -130,7 +130,10 @@
   },
   "dependencies": {
     "@archon/core": "workspace:*",
-    "@archon/memory": "workspace:*"
+    "@archon/memory": "workspace:*",
+    "better-sqlite3": "^12.6.2",
+    "web-tree-sitter": "^0.26.6",
+    "tree-sitter-wasms": "^0.1.13"
   },
   "devDependencies": {
     "@types/marked": "^6.0.0",

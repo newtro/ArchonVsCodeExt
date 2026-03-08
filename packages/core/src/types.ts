@@ -260,6 +260,7 @@ export type ExtensionMessage =
   | { type: 'benchmarksLoaded'; sources: BenchmarkSource[] }
   | { type: 'benchmarkError'; error: string }
   | { type: 'modelPoolUpdated'; modelPool: string[] }
+  | { type: 'openRouterModelsLoaded'; models: ModelInfo[] }
   | { type: 'indexingStatus'; state: 'idle' | 'indexing' | 'ready' | 'error'; filesIndexed?: number; totalFiles?: number; chunkCount?: number; error?: string }
   | { type: 'agentLoopDone' }
   | { type: 'pipelinesLoaded'; pipelines: PipelineInfo[] }
@@ -294,6 +295,18 @@ export type ExtensionMessage =
   | { type: 'openaiAuthStatus'; mode: string; authenticated: boolean; planType?: string; email?: string; error?: string }
   // Context meter
   | { type: 'contextMeterUpdate'; data: ContextMeterData | null }
+  // Memory system
+  | { type: 'memoryConfigLoaded'; config: MemoryModelConfig | null; layerToggles: MemoryLayerToggles; availableProviders: MemoryAvailableProvider[] }
+  | { type: 'memoryModelStatus'; configured: boolean; provider?: string; model?: string; error?: string }
+  | { type: 'memoryTestResult'; ok: boolean; error?: string }
+  | { type: 'memoryDashboardData'; data: MemoryDashboardData }
+  | { type: 'memorySessionsLoaded'; sessions: MemorySessionEntry[] }
+  | { type: 'memoryPreferencesLoaded'; preferences: MemoryPreferenceEntry[] }
+  | { type: 'memoryRulesLoaded'; rules: MemoryRuleEntry[] }
+  | { type: 'memoryDashboardLoaded'; stats: Record<string, number> }
+  | { type: 'contextPreview'; preview: Record<string, number> }
+  | { type: 'compactionStarted' }
+  | { type: 'compactionComplete'; stats: CompactionStats }
   // Hooks
   | { type: 'hookConfigLoaded'; config: { chains: import('./hooks/types').HookChain[]; templates: import('./hooks/types').HookTemplate[]; variables: import('./hooks/types').VariableDefinition[]; enabled: boolean } }
   | { type: 'hookDebug'; event: import('./hooks/types').HookExecutionEvent }
@@ -332,6 +345,7 @@ export type WebviewMessage =
   | { type: 'cancelRequest' }
   | { type: 'selectModel'; modelId: string }
   | { type: 'loadModels' }
+  | { type: 'loadOpenRouterModels' }
   | { type: 'newChat' }
   | { type: 'setApiKey'; key: string }
   | { type: 'askUserResponse'; id: string; response: string }
@@ -385,6 +399,28 @@ export type WebviewMessage =
   // Context meter
   | { type: 'compressContext' }
   | { type: 'resetContext' }
+  // Memory system
+  | { type: 'setMemoryModelConfig'; config: { provider: string; modelId: string; baseUrl?: string } }
+  | { type: 'testMemoryModel' }
+  | { type: 'loadMemoryConfig' }
+  | { type: 'setMemoryLayerToggle'; layer: string; mode: 'inject' | 'record'; enabled: boolean }
+  | { type: 'loadMemoryDashboard' }
+  | { type: 'loadMemorySessions' }
+  | { type: 'updateMemorySession'; sessionId: string; field: string; value: unknown }
+  | { type: 'deleteMemorySession'; sessionId: string }
+  | { type: 'pinMemorySession'; sessionId: string; pinned: boolean }
+  | { type: 'boostMemorySession'; sessionId: string; delta: number }
+  | { type: 'cleanupMemorySessions'; threshold: number }
+  | { type: 'loadMemoryPreferences' }
+  | { type: 'deleteMemoryPreference'; preferenceId: string }
+  | { type: 'togglePreferenceAutoApply'; preferenceId: string; enabled: boolean }
+  | { type: 'promotePreferenceToRule'; preferenceId: string }
+  | { type: 'loadMemoryRules' }
+  | { type: 'createMemoryRule'; rule: { name: string; mode: string; fileMatch?: string; content: string } }
+  | { type: 'updateMemoryRule'; ruleId: string; content: string; mode?: string; fileMatch?: string }
+  | { type: 'deleteMemoryRule'; ruleId: string }
+  | { type: 'saveMemory' }
+  | { type: 'requestContextPreview' }
   // Hooks
   | { type: 'loadHooks' }
   | { type: 'saveHookConfig'; chains: import('./hooks/types').HookChain[]; variables: import('./hooks/types').VariableDefinition[]; enabled: boolean }
@@ -405,6 +441,69 @@ export interface ContextMeterData {
     itemCount: number;
     avgRelevance: number;
   }>;
+}
+
+// Memory system types
+export interface MemoryModelConfig {
+  provider: string;
+  modelId: string;
+  baseUrl?: string;
+  hasApiKey: boolean;
+}
+
+export interface MemoryAvailableProvider {
+  id: string;
+  label: string;
+  models: string[];
+}
+
+export interface MemoryLayerToggles {
+  [layer: string]: { inject: boolean; record: boolean };
+}
+
+export interface MemoryDashboardData {
+  sessions: { count: number; avgConfidence: number; oldestTimestamp?: number };
+  preferences: { count: number; autoApplied: number; pending: number };
+  rules: { count: number; alwaysOn: number; fileMatch: number };
+  codeIndex: { chunks: number; symbols: number; edges: number };
+  archive: { count: number; sessionCount: number };
+  health: { score: number; lastCompaction?: number };
+}
+
+export interface MemorySessionEntry {
+  id: string;
+  timestamp: number;
+  decisions: string[];
+  filesModified: Array<{ path: string; reason: string }>;
+  patternsDiscovered: string[];
+  openItems: string[];
+  confidence: number;
+  pinned: boolean;
+}
+
+export interface MemoryPreferenceEntry {
+  id: string;
+  pattern: string;
+  description: string;
+  occurrences: number;
+  confidence: number;
+  autoApplied: boolean;
+  category?: string;
+}
+
+export interface MemoryRuleEntry {
+  id: string;
+  name: string;
+  mode: string;
+  fileMatch?: string;
+  contentPreview: string;
+}
+
+export interface CompactionStats {
+  tokensBefore: number;
+  tokensAfter: number;
+  messagesCompressed: number;
+  toolResultsMasked: number;
 }
 
 export interface PipelineGraphData {

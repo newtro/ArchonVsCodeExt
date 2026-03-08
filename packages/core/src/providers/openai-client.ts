@@ -43,8 +43,6 @@ const OPENAI_MODELS: ModelInfo[] = [
   { id: 'gpt-5', name: 'GPT-5', description: 'Reasoning + coding', contextLength: 1047576, pricing: { prompt: 1.25, completion: 10.00 }, supportsTools: true, supportsStreaming: true },
   { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Fast, cost-efficient', contextLength: 1047576, pricing: { prompt: 0.25, completion: 2.00 }, supportsTools: true, supportsStreaming: true },
   { id: 'gpt-5-nano', name: 'GPT-5 Nano', description: 'Cheapest and fastest', contextLength: 1047576, pricing: { prompt: 0.05, completion: 0.40 }, supportsTools: true, supportsStreaming: true },
-  // Codex Mini (standalone coding model)
-  { id: 'codex-mini-latest', name: 'Codex Mini', description: 'Lightweight coding model', contextLength: 1047576, pricing: { prompt: 1.50, completion: 6.00 }, supportsTools: true, supportsStreaming: true },
   // GPT-4.1 family
   { id: 'gpt-4.1', name: 'GPT-4.1', contextLength: 1047576, pricing: { prompt: 2.00, completion: 8.00 }, supportsTools: true, supportsStreaming: true },
   { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', contextLength: 1047576, pricing: { prompt: 0.40, completion: 1.60 }, supportsTools: true, supportsStreaming: true },
@@ -57,6 +55,36 @@ const OPENAI_MODELS: ModelInfo[] = [
   { id: 'o3-pro', name: 'o3-pro', description: 'Heavy reasoning', contextLength: 200000, pricing: { prompt: 20.00, completion: 80.00 }, supportsTools: true, supportsStreaming: true },
   { id: 'o4-mini', name: 'o4-mini', description: 'Budget reasoning', contextLength: 200000, pricing: { prompt: 1.10, completion: 4.40 }, supportsTools: true, supportsStreaming: true },
 ];
+
+/**
+ * Models NOT supported by the ChatGPT subscription Codex endpoint
+ * (chatgpt.com/backend-api/codex).
+ *
+ * Retired from ChatGPT Feb 13 2026:
+ *   gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, o4-mini, gpt-5
+ * Confirmed errors on subscription endpoint:
+ *   gpt-5-mini, gpt-5-nano, gpt-5.1, gpt-5.1-codex
+ *
+ * Sources:
+ *   https://openai.com/index/retiring-gpt-4o-and-older-models/
+ *   https://github.com/openai/codex/issues/6603
+ */
+const SUBSCRIPTION_UNSUPPORTED_MODELS = new Set([
+  // Retired from ChatGPT Feb 2026
+  'gpt-4o',
+  'gpt-4o-mini',
+  'gpt-4.1',
+  'gpt-4.1-mini',
+  'gpt-4.1-nano',
+  'o4-mini',
+  // GPT-5 base family — not available on subscription endpoint
+  'gpt-5',
+  'gpt-5-mini',
+  'gpt-5-nano',
+  // GPT-5.1 — confirmed unsupported on subscription endpoint
+  'gpt-5.1',
+  'gpt-5.1-codex',
+]);
 
 // ── Types for Responses API ──
 
@@ -154,7 +182,7 @@ export class OpenAIClient {
 
   async listModels(): Promise<ModelInfo[]> {
     if (this.authMode === 'subscription') {
-      return OPENAI_MODELS;
+      return OPENAI_MODELS.filter(m => !SUBSCRIPTION_UNSUPPORTED_MODELS.has(m.id));
     }
 
     try {
@@ -194,7 +222,8 @@ export class OpenAIClient {
     }
   }
 
-  // ── Simple (non-streaming) chat via Responses API ──
+  // ── Simple chat via Responses API ──
+  // Subscription mode requires stream:true, so we always stream and collect.
 
   async simpleChat(
     model: string,
@@ -206,6 +235,8 @@ export class OpenAIClient {
       .filter(m => m.role !== 'system')
       .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
+    const useStream = this.authMode === 'subscription';
+
     const res = await fetch(`${this.baseUrl}/responses`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.authHeaders },
@@ -214,6 +245,7 @@ export class OpenAIClient {
         instructions,
         input,
         store: false,
+        ...(useStream ? { stream: true } : {}),
         ...(isReasoningModel(model)
           ? { reasoning: { effort: 'medium' } }
           : temperature !== undefined ? { temperature } : {}),
@@ -225,8 +257,45 @@ export class OpenAIClient {
       throw new Error(`OpenAI error ${res.status}: ${errText}`);
     }
 
-    const data = await res.json() as { output_text?: string };
-    return data.output_text ?? '';
+    if (!useStream) {
+      const data = await res.json() as { output_text?: string };
+      return data.output_text ?? '';
+    }
+
+    // Streaming mode: collect text deltas
+    let result = '';
+    let fallbackText = '';
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          let jsonStr: string | null = null;
+          if (trimmed.startsWith('data: ')) jsonStr = trimmed.slice(6);
+          else if (trimmed.startsWith('data:')) jsonStr = trimmed.slice(5);
+          if (!jsonStr || jsonStr === '[DONE]') continue;
+          try {
+            const event = JSON.parse(jsonStr) as Record<string, unknown>;
+            if (event.type === 'response.output_text.delta') {
+              result += (event.delta as string) ?? '';
+            } else if (event.type === 'response.completed') {
+              const response = event.response as Record<string, unknown> | undefined;
+              if (response?.output_text) fallbackText = response.output_text as string;
+            }
+          } catch { /* skip unparseable */ }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return result || fallbackText;
   }
 
   // ── Streaming chat via Responses API (StreamingLLMClient interface) ──

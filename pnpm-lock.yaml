@@ -64,6 +64,15 @@ importers:
       '@archon/memory':
         specifier: workspace:*
         version: link:../memory
+      better-sqlite3:
+        specifier: ^12.6.2
+        version: 12.6.2
+      tree-sitter-wasms:
+        specifier: ^0.1.13
+        version: 0.1.13
+      web-tree-sitter:
+        specifier: ^0.26.6
+        version: 0.26.6
     devDependencies:
       '@types/marked':
         specifier: ^6.0.0

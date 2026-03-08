@@ -106,6 +106,44 @@ export class ClaudeCliProvider implements LLMProvider {
   createExecutor(config: ExecutorConfig): Executor {
     return new ClaudeCliExecutor(this.cliPath, config);
   }
+
+  async simpleChat(
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    temperature?: number,
+  ): Promise<string> {
+    const systemMsg = messages.find(m => m.role === 'system')?.content ?? '';
+    const userMsg = messages.filter(m => m.role !== 'system').map(m => m.content).join('\n');
+    const prompt = systemMsg ? `${systemMsg}\n\n${userMsg}` : userMsg;
+
+    return new Promise<string>((resolve, reject) => {
+      const args = ['-p', '--output-format', 'text', '--model', model, '--max-turns', '1'];
+      const proc = spawn(this.cliPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env },
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf-8'); });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf-8'); });
+
+      proc.on('error', (err) => reject(new Error(`Claude CLI error: ${err.message}`)));
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+        }
+      });
+
+      if (proc.stdin) {
+        proc.stdin.write(prompt);
+        proc.stdin.end();
+      }
+    });
+  }
 }
 
 // ── Executor ──

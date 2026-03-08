@@ -1825,6 +1825,24 @@ body {
   font-size: 12px;
 }
 
+.settings-select {
+  width: 100%;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-label {
+  display: block;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 4px;
+}
+
 .settings-btn {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
@@ -4200,4 +4218,440 @@ body {
 
 .debug-var-value {
   color: var(--vscode-descriptionForeground, #888);
+}
+
+/* ── Memory Layer Toggle ── */
+
+.memory-toggle-container {
+  position: relative;
+  display: inline-flex;
+}
+
+.memory-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #888);
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 11px;
+  transition: background 0.15s;
+}
+
+.memory-toggle-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+  color: var(--vscode-foreground, #ccc);
+}
+
+.memory-toggle-icon {
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.memory-toggle-count {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.memory-toggle-popover {
+  width: 300px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  border-radius: 6px;
+  padding: 8px;
+  z-index: 200;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.memory-toggle-header {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  color: var(--vscode-foreground, #ccc);
+}
+
+.memory-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.memory-toggle-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-toggle-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--vscode-foreground, #ccc);
+}
+
+.memory-toggle-desc {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-toggle-switches {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.memory-switch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #888);
+}
+
+.memory-switch input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.memory-switch-label {
+  user-select: none;
+}
+
+/* ── Memory Dashboard ── */
+
+.memory-dashboard {
+  padding: 12px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.memory-dashboard h3 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+}
+
+.memory-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px 8px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, #454545);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.memory-stat {
+  color: var(--vscode-descriptionForeground, #999);
+  white-space: nowrap;
+}
+
+.memory-stat.ready {
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.memory-stat.not-ready {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.memory-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  padding-bottom: 8px;
+}
+
+.memory-tab {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #888);
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.memory-tab:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+}
+
+.memory-tab.active {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-empty {
+  color: var(--vscode-descriptionForeground, #888);
+  font-size: 12px;
+  text-align: center;
+  padding: 20px;
+}
+
+.memory-card {
+  background: var(--vscode-editor-background, #1e1e1e);
+  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.memory-card-header {
+  cursor: pointer;
+}
+
+.memory-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.memory-card-date {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #888);
+}
+
+.memory-card-confidence {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.memory-card-confidence.high { color: #4ec9b0; }
+.memory-card-confidence.med { color: #dcdcaa; }
+.memory-card-confidence.low { color: #f44747; }
+
+.memory-card-pin {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--vscode-textLink-foreground, #4fc1ff);
+}
+
+.memory-card-summary {
+  font-size: 12px;
+  color: var(--vscode-foreground, #ccc);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-card-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  font-size: 11px;
+}
+
+.memory-detail-section {
+  margin-bottom: 6px;
+}
+
+.memory-detail-section ul {
+  margin: 2px 0 0 16px;
+  padding: 0;
+}
+
+.memory-detail-section li {
+  margin-bottom: 2px;
+  color: var(--vscode-foreground, #ccc);
+}
+
+.memory-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.settings-btn-sm.danger {
+  color: #f44747;
+}
+
+.memory-card-pattern {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vscode-foreground, #ccc);
+}
+
+.memory-card-occurrences {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #888);
+}
+
+.memory-card-rule-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vscode-foreground, #ccc);
+}
+
+.memory-card-mode {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--vscode-descriptionForeground, #888);
+}
+
+.memory-card-mode.always { color: #4ec9b0; }
+
+.memory-card-preview {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #888);
+  margin-top: 4px;
+  white-space: pre-wrap;
+  max-height: 60px;
+  overflow: hidden;
+}
+
+/* ── Memory Dashboard: Bulk actions bar ── */
+.memory-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  margin-bottom: 8px;
+}
+
+.memory-bulk-select {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--vscode-foreground, #ccc);
+  cursor: pointer;
+}
+
+.memory-card.selected {
+  border-color: var(--vscode-focusBorder, #007acc);
+}
+
+.memory-card-checkbox {
+  flex-shrink: 0;
+  margin-right: 4px;
+  cursor: pointer;
+}
+
+/* ── Memory Dashboard: Inline editing ── */
+.memory-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.memory-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memory-edit-field label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-foreground, #ccc);
+}
+
+.memory-edit-textarea {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #ccc);
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
+  border-radius: 3px;
+  resize: vertical;
+}
+
+.memory-edit-textarea:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder, #007acc);
+}
+
+.memory-edit-input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #ccc);
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
+  border-radius: 3px;
+}
+
+.memory-edit-input:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder, #007acc);
+}
+
+.memory-edit-select {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--vscode-dropdown-background, #3c3c3c);
+  color: var(--vscode-dropdown-foreground, #ccc);
+  border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+  border-radius: 3px;
+}
+
+.memory-rule-form {
+  border-color: var(--vscode-focusBorder, #007acc);
+}
+
+/* ── Context preview bar ── */
+.context-preview-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--vscode-editorHoverWidget-border, #333);
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #888);
+}
+
+.context-preview-total {
+  font-weight: 600;
+  color: var(--vscode-foreground, #ccc);
+}
+
+.context-preview-item {
+  padding: 1px 4px;
+  background: var(--vscode-badge-background, #4d4d4d);
+  border-radius: 3px;
+}
+
+/* ── Inline memory citations ── */
+.mem-citation {
+  display: inline-block;
+  padding: 0 4px;
+  margin: 0 1px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  background: var(--vscode-badge-background, #4d4d4d);
+  color: var(--vscode-badge-foreground, #fff);
+  border-radius: 3px;
+  cursor: help;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
