@@ -2,7 +2,7 @@
   "name": "archon",
   "displayName": "Archon",
   "description": "Model-agnostic AI coding extension with visual workflow editor",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "publisher": "JohnnyCode-ai",
   "icon": "resources/archon-icon-marketplace.png",
   "license": "MIT",

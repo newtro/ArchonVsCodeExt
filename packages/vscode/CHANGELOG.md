@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 (2026-03-08)
+
+### Added
+- Publish-to-marketplace skill for automated release workflow
+- Backfilled changelog for all previous versions (0.1.0–0.1.4)
+
 ## 0.1.4 (2026-03-08)
 
 ### Added
