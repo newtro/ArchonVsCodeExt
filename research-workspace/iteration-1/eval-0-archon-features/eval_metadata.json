@@ -1,0 +1,42 @@
+{
+  "eval_id": 0,
+  "eval_name": "archon-killer-features",
+  "prompt": "how can we make the Archon VS Code extension better and what killer features should we add",
+  "assertions": [
+    {
+      "id": "codebase-awareness",
+      "text": "Report references specific Archon features/code (e.g., memory system, pipeline editor, tools) — not generic advice",
+      "type": "qualitative"
+    },
+    {
+      "id": "citations-present",
+      "text": "Report includes at least 5 numbered inline citations [N] linked to a Sources section with real URLs",
+      "type": "quantitative"
+    },
+    {
+      "id": "competitor-analysis",
+      "text": "Report discusses features from at least 3 competing AI coding extensions (e.g., Cursor, Cline, Continue, Copilot, Aider)",
+      "type": "quantitative"
+    },
+    {
+      "id": "actionable-recommendations",
+      "text": "Report provides at least 3 specific, actionable feature recommendations (not vague suggestions)",
+      "type": "quantitative"
+    },
+    {
+      "id": "contradictions-or-tradeoffs",
+      "text": "Report surfaces at least 1 trade-off, counter-argument, or contradiction rather than being purely promotional",
+      "type": "qualitative"
+    },
+    {
+      "id": "structured-report",
+      "text": "Report follows a structured format with executive summary, themed sections, and sources — not a wall of text",
+      "type": "qualitative"
+    },
+    {
+      "id": "recency",
+      "text": "Report includes sources from 2025 or 2026 — not just outdated information",
+      "type": "quantitative"
+    }
+  ]
+}

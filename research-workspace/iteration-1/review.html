@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eval Review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Header ---- */
+    .header {
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .header .instructions {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-top: 0.25rem;
+    }
+    .header .progress {
+      font-size: 0.875rem;
+      opacity: 0.8;
+      text-align: right;
+    }
+
+    /* ---- Main content ---- */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* ---- Sections ---- */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      flex-shrink: 0;
+    }
+    .section-header {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .section-body {
+      padding: 1rem;
+    }
+
+    /* ---- Config badge ---- */
+    .config-badge {
+      display: inline-block;
+      padding: 0.2rem 0.625rem;
+      border-radius: 9999px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin-left: 0.75rem;
+      vertical-align: middle;
+    }
+    .config-badge.config-primary {
+      background: rgba(33, 150, 243, 0.12);
+      color: #1976d2;
+    }
+    .config-badge.config-baseline {
+      background: rgba(255, 193, 7, 0.15);
+      color: #f57f17;
+    }
+
+    /* ---- Prompt ---- */
+    .prompt-text {
+      white-space: pre-wrap;
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    /* ---- Outputs ---- */
+    .output-file {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .output-file + .output-file {
+      margin-top: 1rem;
+    }
+    .output-file-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .output-file-header .dl-btn {
+      font-size: 0.7rem;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    .output-file-header .dl-btn:hover {
+      opacity: 1;
+      text-decoration: underline;
+    }
+    .output-file-content {
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+    .output-file-content pre {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .output-file-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .output-file-content iframe {
+      width: 100%;
+      height: 600px;
+      border: none;
+    }
+    .output-file-content table {
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+      width: 100%;
+    }
+    .output-file-content table td,
+    .output-file-content table th {
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.5rem;
+      text-align: left;
+    }
+    .output-file-content table th {
+      background: var(--bg);
+      font-weight: 600;
+    }
+    .output-file-content .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .output-file-content .download-link:hover {
+      background: var(--border);
+    }
+    .empty-state {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    /* ---- Feedback ---- */
+    .prev-feedback {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.625rem 0.75rem;
+      margin-top: 0.75rem;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .prev-feedback-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.25rem;
+      color: var(--text-muted);
+    }
+    .feedback-textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.9375rem;
+      line-height: 1.5;
+      resize: vertical;
+      color: var(--text);
+    }
+    .feedback-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .feedback-status {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      min-height: 1.1em;
+    }
+
+    /* ---- Grades (collapsible) ---- */
+    .grades-toggle {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .grades-toggle:hover {
+      color: var(--accent);
+    }
+    .grades-toggle .arrow {
+      margin-right: 0.5rem;
+      transition: transform 0.15s;
+      font-size: 0.75rem;
+    }
+    .grades-toggle .arrow.open {
+      transform: rotate(90deg);
+    }
+    .grades-content {
+      display: none;
+      margin-top: 0.75rem;
+    }
+    .grades-content.open {
+      display: block;
+    }
+    .grades-summary {
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .grade-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .grade-pass { background: var(--green-bg); color: var(--green); }
+    .grade-fail { background: var(--red-bg); color: var(--red); }
+    .assertion-list {
+      list-style: none;
+    }
+    .assertion-item {
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .assertion-item:last-child { border-bottom: none; }
+    .assertion-status {
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .assertion-status.pass { color: var(--green); }
+    .assertion-status.fail { color: var(--red); }
+    .assertion-evidence {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+      padding-left: 1.5rem;
+    }
+
+    /* ---- View tabs ---- */
+    .view-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 2rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .view-tab {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.625rem 1.25rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .view-panel { display: none; }
+    .view-panel.active { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+    /* ---- Benchmark view ---- */
+    .benchmark-view {
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .benchmark-table {
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      width: 100%;
+      margin-bottom: 1.5rem;
+    }
+    .benchmark-table th, .benchmark-table td {
+      padding: 0.625rem 0.75rem;
+      text-align: left;
+      border: 1px solid var(--border);
+    }
+    .benchmark-table th {
+      font-family: 'Poppins', sans-serif;
+      background: var(--header-bg);
+      color: var(--header-text);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .benchmark-table tr:hover { background: var(--bg); }
+    .benchmark-table tr.benchmark-row-with { background: rgba(33, 150, 243, 0.06); }
+    .benchmark-table tr.benchmark-row-without { background: rgba(255, 193, 7, 0.06); }
+    .benchmark-table tr.benchmark-row-with:hover { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-without:hover { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-table tr.benchmark-row-avg { font-weight: 600; border-top: 2px solid var(--border); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-with { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-without { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-delta-positive { color: var(--green); font-weight: 600; }
+    .benchmark-delta-negative { color: var(--red); font-weight: 600; }
+    .benchmark-notes {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+    }
+    .benchmark-notes h3 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+    .benchmark-notes ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+    }
+    .benchmark-notes li {
+      font-size: 0.8125rem;
+      line-height: 1.6;
+      margin-bottom: 0.375rem;
+    }
+    .benchmark-empty {
+      color: var(--text-muted);
+      font-style: italic;
+      text-align: center;
+      padding: 3rem;
+    }
+
+    /* ---- Navigation ---- */
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .nav-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    .nav-btn:hover:not(:disabled) {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .nav-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .done-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .done-btn:hover {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .done-btn.ready {
+      border: none;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+    .done-btn.ready:hover {
+      background: var(--accent-hover);
+    }
+    /* ---- Done overlay ---- */
+    .done-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .done-overlay.visible {
+      display: flex;
+    }
+    .done-card {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem 3rem;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+    }
+    .done-card h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .done-card p {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+    .done-card .btn-row {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .done-card button {
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+    .done-card button:hover {
+      background: var(--bg);
+    }
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 0.625rem 1.25rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 200;
+    }
+    .toast.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="height:100vh; display:flex; flex-direction:column;">
+    <div class="header">
+      <div>
+        <h1>Eval Review: <span id="skill-name"></span></h1>
+        <div class="instructions">Review each output and leave feedback below. Navigate with arrow keys or buttons. When done, copy feedback and paste into Claude Code.</div>
+      </div>
+      <div class="progress" id="progress"></div>
+    </div>
+
+    <!-- View tabs (only shown when benchmark data exists) -->
+    <div class="view-tabs" id="view-tabs" style="display:none;">
+      <button class="view-tab active" onclick="switchView('outputs')">Outputs</button>
+      <button class="view-tab" onclick="switchView('benchmark')">Benchmark</button>
+    </div>
+
+    <!-- Outputs panel (qualitative review) -->
+    <div class="view-panel active" id="panel-outputs">
+    <div class="main">
+      <!-- Prompt -->
+      <div class="section">
+        <div class="section-header">Prompt <span class="config-badge" id="config-badge" style="display:none;"></span></div>
+        <div class="section-body">
+          <div class="prompt-text" id="prompt-text"></div>
+        </div>
+      </div>
+
+      <!-- Outputs -->
+      <div class="section">
+        <div class="section-header">Output</div>
+        <div class="section-body" id="outputs-body">
+          <div class="empty-state">No output files found</div>
+        </div>
+      </div>
+
+      <!-- Previous Output (collapsible) -->
+      <div class="section" id="prev-outputs-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="togglePrevOutputs()">
+            <span class="arrow" id="prev-outputs-arrow">&#9654;</span>
+            Previous Output
+          </div>
+        </div>
+        <div class="grades-content" id="prev-outputs-content"></div>
+      </div>
+
+      <!-- Grades (collapsible) -->
+      <div class="section" id="grades-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="toggleGrades()">
+            <span class="arrow" id="grades-arrow">&#9654;</span>
+            Formal Grades
+          </div>
+        </div>
+        <div class="grades-content" id="grades-content"></div>
+      </div>
+
+      <!-- Feedback -->
+      <div class="section">
+        <div class="section-header">Your Feedback</div>
+        <div class="section-body">
+          <textarea
+            class="feedback-textarea"
+            id="feedback"
+            placeholder="What do you think of this output? Any issues, suggestions, or things that look great?"
+          ></textarea>
+          <div class="feedback-status" id="feedback-status"></div>
+          <div class="prev-feedback" id="prev-feedback" style="display:none;">
+            <div class="prev-feedback-label">Previous feedback</div>
+            <div id="prev-feedback-text"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav" id="outputs-nav">
+      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; Previous</button>
+      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">Submit All Reviews</button>
+      <button class="nav-btn" id="next-btn" onclick="navigate(1)">Next &#8594;</button>
+    </div>
+    </div><!-- end panel-outputs -->
+
+    <!-- Benchmark panel (quantitative stats) -->
+    <div class="view-panel" id="panel-benchmark">
+      <div class="benchmark-view" id="benchmark-content">
+        <div class="benchmark-empty">No benchmark data available. Run a benchmark to see quantitative results here.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Done overlay -->
+  <div class="done-overlay" id="done-overlay">
+    <div class="done-card">
+      <h2>Review Complete</h2>
+      <p>Your feedback has been saved. Go back to your Claude Code session and tell Claude you're done reviewing.</p>
+      <div class="btn-row">
+        <button onclick="closeDoneDialog()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ---- Embedded data (injected by generate_review.py) ----
+    const EMBEDDED_DATA = {"skill_name": "research", "runs": [{"id": "eval-0-archon-features-with_skill", "prompt": "how can we make the Archon VS Code extension better and what killer features should we add", "eval_id": 0, "outputs": [{"name": "report.md", "type": "text", "content": "# Research Report: Archon VS Code Extension -- Killer Features & Improvement Strategy\n\n*Generated: 2026-03-09 | Time budget: 10m | Sources consulted: 24*\n\n## Executive Summary\n\n- **Archon already has strong differentiators** that most competitors lack: a visual pipeline editor, a full memory system with SQLite/sqlite-vec, a skills framework, hooks engine, and multi-provider support (OpenRouter, OpenAI, Claude CLI). These are unique and valuable -- the strategy should be to polish and market them, not abandon them for \"me too\" features.\n- **The biggest gaps** compared to market leaders are: (1) no inline code completions / \"ghost text\" suggestions, (2) no autonomous test-fix loop, (3) no MCP server/client integration, (4) no VS Code Chat Participant API integration, and (5) limited git-native workflows.\n- **The #1 developer complaint** across all AI coding tools is context degradation and loss of architectural coherence over long sessions [1][3][8]. Archon's existing memory system is well-positioned to solve this -- it needs to be surfaced more prominently and made demonstrably better than competitors.\n- **Multi-agent orchestration** is the defining trend of 2026, with VS Code itself becoming a \"multi-agent command center\" [4][6]. Archon's sub-agent spawning capability is a foundation to build on.\n- **The counter-argument to adding more features** is real: developer fatigue with bloated AI tools is growing [10][11]. Every new feature must earn its place by reducing friction, not adding UI complexity.\n\n## Project Context\n\n| Attribute | Value |\n|-----------|-------|\n| Language | TypeScript (CJS output) |\n| Framework | VS Code Extension API, React 19 (webview) |\n| Build | pnpm workspaces + turborepo, esbuild + vite |\n| AI Providers | OpenRouter, OpenAI (OAuth + API key), Claude CLI |\n| Memory | SQLite (better-sqlite3) + sqlite-vec, tree-sitter WASM |\n| Key Packages | `@archon/core` (agent loop, tools, pipeline, skills, hooks, security), `@archon/memory` (RAG, graph, sessions, context, rules), `archon` (VS Code extension + webview) |\n\n### Current Feature Inventory\n\nArchon already ships features that many competitors charge for or lack entirely:\n\n- **Visual Pipeline Editor** -- drag-and-drop agent workflow builder with node graph, templates, prompt enhancement\n- **Skills System** -- YAML-frontmatter skills with versioning, templates, conversation-to-skill conversion, global/project scope\n- **Hooks Engine** -- event-driven hook chains with variable stores, templates, debug state, import/export\n- **Memory System** -- 8-phase implementation including AST chunking (11 languages), graph builder with recursive CTEs, tiered context management, auto-summarization, edit tracking, telemetry dashboard\n- **Security Manager** -- 4-tier security levels (yolo/permissive/standard/strict) with command categorization\n- **Network Monitor** -- request tracking with threat level assessment\n- **Context Meter** -- token budget visualization with health scoring and auto-compaction\n- **Multi-provider** -- OpenRouter (model marketplace), OpenAI (OAuth + API key), Claude CLI\n- **Git Checkpoints** -- automatic checkpoint commits before edit batches\n- **Diff View** -- configurable diff preview before applying edits\n- **Sub-agent spawning** -- parallel branch execution with activity tracking\n- **Attachments** -- file, image, PDF support in chat\n- **Benchmark Dashboard** -- model comparison data\n- **Todo Widget** -- task tracking during agent execution\n- **Chat History** -- session save/load with summaries\n\n## Theme 1: The \"Complete Loop\" -- From Chat to Ship\n\nThe strongest signal across all research is that developers want AI assistants that close the loop from intent to verified, shipped code. The current generation (including Archon) mostly stops at \"generate code and write files.\" The winners in 2026 complete the cycle.\n\n### 1A. Autonomous Test-Fix Loop (High Priority)\n\nThe emerging pattern in tools like GitHub Copilot's agent mode, Windsurf Cascade, and Factory is a \"write-test-fix\" loop where the agent:\n1. Writes or modifies code\n2. Automatically runs the project's test suite\n3. Reads failures and iterates on fixes\n4. Only presents the final working result to the user\n\nGitHub Copilot's agent mode can \"debug failing tests by reading errors, tracing root causes across your codebase, applying fixes, and re-running tests to confirm\" [2]. Windsurf's Cascade \"looks at the new error and tries a different approach, looping through this process until the task is actually done\" [7].\n\n**Archon opportunity**: The agent loop already has `run_terminal` and `read_file` tools. Adding a `run_tests` meta-tool that automatically invokes the project's test command, parses structured output (TAP, JUnit XML, Jest JSON), and feeds failures back into the agent context would be a high-impact addition. The key safeguard is an iteration cap (e.g., max 5 fix attempts) to prevent runaway loops [14].\n\n### 1B. Lint/Type-Check Integration (Medium Priority)\n\nThe \"Beyond the Vibes\" guide makes a compelling case that static analysis is the most effective guardrail for AI-generated code [3]. AI agents that can read linter output and auto-fix violations produce measurably better code.\n\n**Archon opportunity**: Archon already has `getDiagnostics` in its `ToolContext`. This should be automatically invoked after file writes, with the agent prompted to fix any errors/warnings before presenting results. This is low-hanging fruit.\n\n### 1C. AI Code Review Before Commit (Medium Priority)\n\nCodeRabbit and Qodo demonstrate that AI-powered self-review catches issues that the generating agent misses [5]. Teams using AI code review \"reduce time spent on reviews by 40-60% while improving defect detection rates\" [5].\n\n**Archon opportunity**: Add a \"review before commit\" step in the pipeline that uses a different model (or the same model with a reviewer persona) to critique the agent's own changes before presenting them. This leverages the existing pipeline system.\n\n## Theme 2: Context Intelligence -- Archon's Hidden Weapon\n\nThe #1 complaint across all AI coding tools is context degradation [1][3][8]. Archon's memory system is already more sophisticated than most competitors, but it's not marketed or surfaced effectively.\n\n### 2A. \"Knows Your Codebase\" -- Proactive Context (High Priority)\n\nWindsurf's \"Memories\" feature is heavily marketed: it \"autonomously learns your codebase architecture and coding style over ~48 hours, persisting across sessions\" [9]. Cursor's dynamic context discovery \"reduced token usage by 46.9%\" [9]. Sourcegraph Cody \"leverages Sourcegraph's powerful code intelligence to understand your entire codebase\" [12].\n\nArchon already has: AST chunking across 11 languages, graph builder with symbol/edge extraction, RAG hybrid search, session memory with auto-summarization, edit tracking with pattern extraction.\n\n**Archon opportunity**: The gap is *surfacing* this capability. Add an onboarding flow that shows \"Archon is learning your codebase...\" with progress, and periodic \"Archon noticed you prefer X pattern\" notifications. Make the memory visible and trustworthy. The ContextMeter component exists but should be more prominent.\n\n### 2B. AGENTS.md / Project Rules (Medium Priority)\n\nThe \"AGENTS.md\" standard [3] is gaining traction as a way to give AI agents explicit project-level instructions. Archon's Rules Engine already supports this concept, but it should also auto-detect and respect `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, and `.github/copilot-instructions.md` files.\n\n**Archon opportunity**: Add auto-detection of common AI instruction files at project open, and import them into the Rules Engine. This makes migration from other tools frictionless.\n\n### 2C. Architecture-Aware Suggestions (High Priority)\n\nThe strongest criticism of AI assistants is that they \"optimize for immediate task completion without considering architectural coherence\" [3][10]. This leads to \"duplicate logic, mismatched method names, no coherent architecture\" [10].\n\n**Archon opportunity**: The graph builder already maps symbols and edges. Use this to detect when the agent is about to create a duplicate utility function, introduce an inconsistent naming pattern, or violate an established architectural boundary. Surface these as warnings during code generation.\n\n## Theme 3: Multi-Agent & Workflow Orchestration\n\nVS Code v1.109+ positions itself as \"the home for multi-agent development\" with support for running Claude, Codex, and Copilot side by side [4][6]. This is a massive opportunity for Archon.\n\n### 3A. MCP Server Integration (High Priority)\n\nModel Context Protocol is the emerging standard for AI tool integration [15][16]. VS Code natively supports MCP servers in agent mode. Every major competitor now supports MCP.\n\n**Archon opportunity**: Archon should both *consume* MCP servers (letting users connect external tools like databases, APIs, documentation) and *expose* its own capabilities as MCP servers (so Archon's memory, skills, and pipeline features can be used by other AI tools). This is table stakes in 2026.\n\n### 3B. VS Code Chat Participant API (Medium Priority)\n\nVS Code's Chat Participant API allows extensions to register as `@participant` experts in the native Copilot Chat [17]. This would let users type `@archon` in VS Code's built-in chat to access Archon's capabilities without switching to the sidebar.\n\n**Archon opportunity**: Register Archon as a chat participant with slash commands like `/pipeline`, `/memory`, `/skill`. This increases visibility and makes Archon feel native rather than siloed.\n\n### 3C. Background & Cloud Agents (Medium Priority)\n\nThe multi-agent paradigm supports background agents that run asynchronously while the developer continues working [4]. Codex and Claude both support cloud-based agent execution.\n\n**Archon opportunity**: Archon's sub-agent spawning is a foundation. Add the ability to \"send a task to the background\" with notifications when complete. The pipeline system could support long-running pipelines that execute asynchronously.\n\n## Theme 4: Developer Experience Polish\n\n### 4A. Inline Completions / Ghost Text (High Priority)\n\nEvery top-tier AI coding tool offers inline code completions -- the \"ghost text\" that appears as you type [2][9]. This is the single most-used AI feature by developers and the primary entry point for adoption. Archon currently only operates through a chat sidebar.\n\n**Archon opportunity**: Implement the VS Code Inline Completions API to provide code suggestions as the user types. This could use a fast, cheap model (like a small local model via Ollama) for speed, with the full agent available in chat for complex tasks. This is arguably the highest-impact feature for user acquisition.\n\n### 4B. Git-Native Workflows (Medium Priority)\n\nAider's key differentiator is deep git integration: \"every change auto-committed with descriptive messages\" and `/undo` to revert AI changes [9]. Archon has git checkpoints but could go further.\n\n**Archon opportunity**: Add `/undo` to revert the last AI change batch via git. Show a \"changes timeline\" that maps agent actions to git commits. Allow branching strategies where the agent works on a feature branch and the developer reviews before merging.\n\n### 4C. Keyboard-First UX (Low-Medium Priority)\n\nCline's Cmd+' shortcut for instant focus and lightbulb actions for selected text (\"Explain with Cline\", \"Improve with Cline\") are UX patterns that reduce friction [13]. Archon has Ctrl+Shift+A for focus but could add more context-menu and lightbulb integrations.\n\n**Archon opportunity**: Add right-click context menu items: \"Ask Archon about this\", \"Refactor with Archon\", \"Generate tests with Archon\". Add CodeAction provider for inline lightbulb suggestions.\n\n### 4D. Streaming Diff Preview (Low Priority)\n\nRather than showing a wall of streamed text and then applying changes, show a live diff preview as the agent generates code. This gives the developer real-time visibility into what's changing.\n\n## Theme 5: Killer Differentiators -- What Nobody Else Has\n\nThese are features that would make Archon uniquely valuable, not \"me too\" features.\n\n### 5A. \"Architecture Guardian\" Mode (High Impact, Unique)\n\nNo current AI coding tool actively prevents architectural drift. Archon's graph builder + memory system could power a mode that:\n- Maintains an architectural model of the codebase (layers, module boundaries, dependency rules)\n- Warns when the agent (or the developer) violates architectural constraints\n- Suggests refactoring when it detects emerging anti-patterns (God objects, circular dependencies, duplicated utilities)\n\nThis directly addresses the #1 complaint about AI coding tools [3][10] and no competitor currently offers it.\n\n### 5B. \"Skill Marketplace\" -- Community-Shared Agent Skills (High Impact, Unique)\n\nArchon's skills system is already more sophisticated than any competitor's. The next step is a marketplace where developers share skills:\n- \"Django REST API Skill\" -- knows Django conventions, generates serializers, viewsets, URL patterns\n- \"React Testing Skill\" -- generates comprehensive React Testing Library tests\n- \"Database Migration Skill\" -- handles Prisma/Knex/TypeORM migrations with rollback safety\n\nThis creates a network effect and community moat. No competitor has a skill marketplace.\n\n### 5C. \"Pipeline Templates\" for Common Workflows (Medium Impact, Unique)\n\nThe visual pipeline editor is unique to Archon. Create pre-built pipeline templates for:\n- **Code Review Pipeline**: Analyze -> Lint -> Security Scan -> Suggest Improvements -> Generate Report\n- **Feature Implementation Pipeline**: Spec Review -> Design -> Implement -> Test -> Document\n- **Bug Fix Pipeline**: Reproduce -> Root Cause Analysis -> Fix -> Regression Test -> PR Description\n- **Refactoring Pipeline**: Identify Smells -> Plan Changes -> Implement -> Verify Tests -> Commit\n\n### 5D. \"Model A/B Testing\" (Medium Impact, Unique)\n\nArchon already supports multiple models and has a benchmark dashboard. Add the ability to run the same prompt against two models simultaneously, compare outputs side-by-side, and track which model performs better for different task types over time. This feeds into intelligent model routing.\n\n### 5E. Cost Dashboard & Token Optimization (Medium Impact)\n\nArchon's model-agnostic architecture means users pay API costs directly. Add a cost tracking dashboard showing:\n- Spend per session, per day, per week\n- Cost per task type (code generation vs. explanation vs. review)\n- Recommendations for cheaper models that perform similarly for specific tasks\n- Token usage optimization suggestions\n\nThis builds trust with cost-conscious developers (the primary Cline user segment).\n\n## Counter-Arguments\n\n### \"Just add inline completions and nothing else matters\"\nThere is some truth to this -- inline completions are the most-used AI feature, and without them Archon will struggle for mainstream adoption [2]. However, inline completions alone are commoditized; every tool offers them. Archon needs completions as table stakes *plus* unique differentiators.\n\n### \"Feature bloat kills tools\"\nDeveloper fatigue with complex AI tools is real [10][11]. The counter to this is progressive disclosure -- keep the default experience simple (chat + completions), and let power users discover pipelines, skills, hooks, and memory through exploration. The current UI already does this reasonably well with tabbed panels.\n\n### \"Self-healing test loops are dangerous\"\nRunaway agents that loop endlessly or ping-pong between fixes are a real risk [14]. Mitigations include iteration caps, time limits, cost ceilings, and always keeping humans in the loop for the final approval. Archon's security levels (yolo to strict) are well-suited for this -- strict mode would require approval at each iteration.\n\n### \"Memory systems add latency and complexity\"\nRetrieving context from SQLite adds overhead to every request. The counter is that better context *reduces* total iterations and token usage, as demonstrated by Cursor's 46.9% token reduction [9]. The net effect is faster, cheaper sessions.\n\n## Contradictions & Disagreements\n\n1. **Productivity claims are contested.** Some sources report \"40-60% reduction in review time\" [5], while a controlled study found developers using AI were \"on average 19% slower\" [1]. The difference likely depends on task type, developer experience, and tool maturity.\n\n2. **Autonomous vs. supervised agents.** Windsurf and Factory push toward autonomous execution [7][14], while the \"Beyond the Vibes\" guide strongly argues for human oversight [3]. Archon's security level system elegantly handles this by letting the user choose their comfort level.\n\n3. **Feature richness vs. simplicity.** Continue and Cline succeed with focused, simple interfaces [12][13], while Cursor and Windsurf succeed with rich, integrated experiences [7][9]. Both approaches work -- the key is internal coherence, not feature count.\n\n## Gaps & Limitations\n\n- This research did not include user interviews or surveys of current Archon users\n- Pricing strategy and business model comparisons were not explored\n- Performance benchmarks (latency, memory usage) of Archon vs. competitors were not measured\n- The research focused on the VS Code extension market; JetBrains and Neovim markets were not analyzed\n- No analysis of Archon's current marketplace download numbers or user retention metrics\n- Security audit capabilities (beyond the existing network monitor) were not deeply researched\n\n## Suggested Follow-ups\n\n1. **User research**: Survey current Archon users to validate which proposed features they would actually use. The biggest risk is building features nobody wants.\n2. **Inline completions prototype**: Build a minimal inline completion provider using a fast model to validate the UX before full investment.\n3. **MCP integration spike**: Implement MCP client support as a time-boxed prototype to assess complexity and value.\n4. **Architecture Guardian feasibility**: Evaluate whether the existing graph builder data is sufficient to detect architectural violations, or if additional analysis is needed.\n5. **Competitive positioning study**: Deep-dive into how to position Archon vs. Cline (the closest open-source competitor) and Cursor (the market leader).\n\n## Sources\n\n1. [Newer AI Coding Assistants Are Failing in Insidious Ways - IEEE Spectrum](https://spectrum.ieee.org/ai-coding-degrades) -- 2025/2026 -- AI-generated code creates 1.7x more issues than human code\n2. [Best AI Coding Assistants 2026 - Shakudo](https://www.shakudo.io/blog/best-ai-coding-assistants) -- March 2026 -- Comprehensive feature comparison of top tools\n3. [Beyond the Vibes: A Rigorous Guide to AI Coding Assistants - tedivm](https://blog.tedivm.com/guides/2026/03/beyond-the-vibes-coding-assistants-and-agents/) -- March 2026 -- Best practices, AGENTS.md standard, infrastructure requirements\n4. [Your Home for Multi-Agent Development - VS Code Blog](https://code.visualstudio.com/blogs/2026/02/05/multi-agent-development) -- February 2026 -- VS Code multi-agent architecture and APIs\n5. [Best AI for Code Review 2026 - Verdent](https://www.verdent.ai/guides/best-ai-for-code-review-2026) -- 2026 -- AI code review tools and productivity impact\n6. [VS Code becomes multi-agent command center - The New Stack](https://thenewstack.io/vs-code-becomes-multi-agent-command-center-for-developers/) -- 2026 -- Industry analysis of VS Code's multi-agent direction\n7. [Windsurf Review 2026 - Second Talent](https://www.secondtalent.com/resources/windsurf-review/) -- 2026 -- Cascade agent features and memory system\n8. [AI Memory and Context Windows Explained - AI Coding Flow](https://ai-coding-flow.com/blog/ai-memory-context-window-explained-2026/) -- 2026 -- Context window limitations and management strategies\n9. [The 15 Best AI Coding Assistants in 2026 - Vibehackers](https://vibehackers.io/blog/best-ai-coding-assistants) -- 2026 -- Feature matrix comparing all major tools\n10. [AI coding is now everywhere. But not everyone is convinced - MIT Technology Review](https://www.technologyreview.com/2025/12/15/1128352/rise-of-ai-coding-developers-2026/) -- December 2025 -- Developer sentiment and adoption challenges\n11. [Best AI Coding Agents for 2026 - Faros AI](https://www.faros.ai/blog/best-ai-coding-agents-2026) -- 2026 -- Feature bloat and developer fatigue analysis\n12. [Top 7 Open-Source AI Coding Assistants in 2026 - Second Talent](https://www.secondtalent.com/resources/open-source-ai-coding-assistants/) -- 2026 -- Open-source tool comparison and community preferences\n13. [Cline Review 2026 - Vibecoding.app](https://vibecoding.app/blog/cline-review-2026) -- 2026 -- Cline features, UX patterns, and recent updates\n14. [Self-Improving Coding Agents - Addy Osmani](https://addyosmani.com/blog/self-improving-agents/) -- 2026 -- Risks and patterns for autonomous agent loops\n15. [MCP developer guide - VS Code](https://code.visualstudio.com/api/extension-guides/ai/mcp) -- 2026 -- MCP integration capabilities for extensions\n16. [MCP Apps - Model Context Protocol Blog](http://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/) -- January 2026 -- Interactive UI components via MCP\n17. [Chat Participant API - VS Code](https://code.visualstudio.com/api/extension-guides/ai/chat) -- 2026 -- How to register custom chat participants\n18. [Cursor vs GitHub Copilot vs Continue - DEV Community](https://dev.to/synsun/cursor-vs-github-copilot-vs-continue-ai-code-editor-showdown-2026-3phk) -- 2026 -- Three-way feature comparison\n19. [AI Coding Tools Comparison 2026 - Toolpod](https://toolpod.dev/ai-coding-tools-comparison) -- 2026 -- Cursor vs Copilot vs Windsurf detailed comparison\n20. [How to Architect Self-Healing CI/CD for Agentic AI - Optimum Partners](https://optimumpartners.com/insight/how-to-architect-self-healing-ci/cd-for-agentic-ai/) -- 2026 -- Pipeline Doctor pattern and repair agents\n21. [5 AI Code Review Pattern Predictions in 2026 - Qodo](https://www.qodo.ai/blog/5-ai-code-review-pattern-predictions-in-2026/) -- 2026 -- AI code review trends\n22. [Context Window Scaling: Does 200K Tokens Help?](https://dasroot.net/posts/2026/02/context-window-scaling-200k-tokens-help/) -- February 2026 -- Context window performance degradation data\n23. [AI extensibility in VS Code](https://code.visualstudio.com/api/extension-guides/ai/ai-extensibility-overview) -- 2026 -- Complete AI API surface for extensions\n24. [The Productivity Paradox of AI Coding Assistants - Cerbos](https://www.cerbos.dev/blog/productivity-paradox-of-ai-coding-assistants) -- 2026 -- Evidence for and against productivity gains\n"}], "grading": {"eval_id": 0, "eval_name": "archon-killer-features", "run_type": "with_skill", "expectations": [{"text": "Report references specific Archon features/code (e.g., memory system, pipeline editor, tools) \u00e2\u20ac\u201d not generic advice", "passed": true, "evidence": "Report has a detailed Project Context table and Current Feature Inventory. References specific components: AST chunking across 11 languages, graph builder with recursive CTEs, EditTracker, ContextMeter, pipeline editor, skills system, hooks engine, security levels (yolo/permissive/standard/strict), git checkpoints, sub-agent spawning. Recommendations build on these specific features (e.g., Architecture Guardian uses existing graph builder)."}, {"text": "Report includes at least 5 numbered inline citations [N] linked to a Sources section with real URLs", "passed": true, "evidence": "Report contains 24 numbered inline citations [1] through [24], each linked to the Sources section at the bottom. Sources include real URLs from IEEE Spectrum, VS Code Blog, MIT Technology Review, Shakudo, Vibehackers, etc. Citations are used naturally throughout the text (e.g., '[1][3][8]' for context degradation claims, '[2]' for Copilot agent mode, '[9]' for Cursor token reduction)."}, {"text": "Report discusses features from at least 3 competing AI coding extensions", "passed": true, "evidence": "Discusses: GitHub Copilot (agent mode, NES), Cursor (dynamic context, Bugbot, 46.9% token reduction), Windsurf (Cascade, Memories), Cline (UX patterns, Cmd+'), Continue (open-source comparison), Sourcegraph Cody (code intelligence), Aider (git integration), CodeRabbit (code review), Qodo (code review), Factory (autonomous agents). At least 10 competitors analyzed."}, {"text": "Report provides at least 3 specific, actionable feature recommendations", "passed": true, "evidence": "Provides 15+ specific recommendations organized by theme: (1) Autonomous test-fix loop with run_tests meta-tool, (2) MCP server integration (consume + expose), (3) Architecture Guardian mode using graph builder, (4) Skill Marketplace for community sharing, (5) Model A/B Testing, (6) Inline completions via InlineCompletionsAPI, (7) VS Code Chat Participant API integration, (8) AGENTS.md auto-detection, (9) Cost Dashboard, (10) Git-native workflows with /undo. Each has specific implementation guidance."}, {"text": "Report surfaces at least 1 trade-off or counter-argument", "passed": true, "evidence": "Has a full 'Counter-Arguments' section with 4 named counter-arguments: 'Just add inline completions and nothing else matters', 'Feature bloat kills tools', 'Self-healing test loops are dangerous', 'Memory systems add latency and complexity'. Also has a 'Contradictions & Disagreements' section with 3 items: productivity claims contested (40-60% vs 19% slower), autonomous vs supervised agents, feature richness vs simplicity."}, {"text": "Report follows structured format with executive summary, themed sections, and sources", "passed": true, "evidence": "Follows the skill's report template exactly: Executive Summary (5 bullet points), Project Context (table + feature inventory), 5 themed sections (Complete Loop, Context Intelligence, Multi-Agent Orchestration, DX Polish, Killer Differentiators), Counter-Arguments, Contradictions & Disagreements, Gaps & Limitations, Suggested Follow-ups, Sources (24 numbered entries with titles, URLs, dates, and relevance notes)."}, {"text": "Report includes sources from 2025 or 2026", "passed": true, "evidence": "23 of 24 sources are from 2025-2026. Examples: 'March 2026' (Beyond the Vibes), 'February 2026' (VS Code multi-agent blog), 'January 2026' (MCP Apps), 'December 2025' (MIT Technology Review). Source dates are explicitly listed."}], "pass_rate": 1.0, "summary": "All 7 assertions passed. The with-skill report follows the research pipeline structure, has comprehensive inline citations, detailed competitor analysis, specific actionable recommendations, dedicated counter-argument and contradiction sections, and recent sources."}}, {"id": "eval-0-archon-features-without_skill", "prompt": "how can we make the Archon VS Code extension better and what killer features should we add", "eval_id": 0, "outputs": [{"name": "report.md", "type": "text", "content": "# Archon VS Code Extension: Feature Analysis & Improvement Roadmap\n\n## 1. Current Feature Inventory\n\n### What Archon Has Today (v0.1.5)\n\n**Core Agent Loop**\n- Streaming LLM responses with tool calling\n- Configurable max iterations and temperature\n- Hook system (before/after LLM call, before/after tool exec, iteration, turn start/end)\n- Sub-agent spawning with parallel execution\n- Message injection during running loops\n- Abort/cancel support\n\n**Tool Suite (14 core + 8 extended)**\n- Core: `read_file`, `write_file`, `edit_file` (with fuzzy matching fallback), `search_files`, `find_files`, `list_directory`, `run_terminal`, `ask_user`, `attempt_completion`, `create_pipeline`, `edit_pipeline`, `list_pipelines`, `delete_pipeline`, `todo_write`\n- Extended: `web_search` (Brave + DuckDuckGo), `web_fetch`, `lookup_docs`, `search_codebase` (RAG), `search_history`, `spawn_agent`, `diff_view`, `tool_search`\n- LSP: `go_to_definition`, `find_references`, `get_hover_info`, `get_workspace_symbols`, `get_document_symbols`, `get_code_actions`, `get_diagnostics`\n\n**LLM Provider Support**\n- OpenRouter (primary)\n- OpenAI (API key + OAuth)\n- Claude CLI (local Anthropic integration)\n- Model selector with model pool management\n\n**Memory System (Sophisticated - Phases A-H complete)**\n- SQLite + `sqlite-vec` for vector search\n- AST chunker with tree-sitter WASM (11 languages)\n- Graph builder with symbols, edges, recursive CTEs\n- Context manager with tiered memory and token budgeting\n- Auto-summarizer with LLM-powered session summaries\n- Edit tracker for learning coding preferences\n- Memory telemetry and health dashboard\n- Layer controls with per-layer inject/record toggles\n\n**Pipeline System (Visual Workflow Editor)**\n- Node types: agent, tool, decision_gate, user_checkpoint, loop, parallel, verification, plugin\n- Visual graph editor in React webview\n- Pipeline storage (project/global/builtin)\n- Pipeline executor with node status tracking\n\n**Skills System**\n- File-based skills with YAML frontmatter\n- Simple (single file) and rich (directory with scripts/references/assets) skills\n- Skill registry, loader, executor, version manager\n- Auto-detection triggers (e.g., `file:.py`, `repo:Dockerfile`)\n- Convert-conversation-to-skill wizard\n- Skill templates\n\n**Hooks System**\n- Hook chains with configurable hook points\n- Variable store for hook state\n- Hook bridge connecting to agent loop\n- Templates and debug events\n- Import/export configuration\n\n**UI / Webview (React + Zustand)**\n- Chat interface with message bubbles, streaming, markdown\n- Parallel branch groups for sub-agent visualization\n- File picker, attachment chips (images, PDFs, files)\n- Pipeline editor (visual DAG)\n- Skills panel with CRUD\n- Memory dashboard (sessions, preferences, rules)\n- Context meter (token usage visualization)\n- Network monitor panel\n- Benchmark dashboard (model comparison)\n- Settings panel (security, providers, memory model)\n- Hooks panel\n- Todo list widget\n- Chat history with session save/load\n- Model selector dropdown\n\n**Security**\n- 4-tier security levels: yolo, permissive, standard, strict\n- Git checkpoint commits before edit batches\n- Diff view mode (always/auto/never)\n- Project trust gate\n\n---\n\n## 2. Competitive Landscape Analysis (March 2026)\n\n### Tier 1: Market Leaders\n\n| Feature | Copilot | Cursor | Claude Code | Cline | Archon |\n|---------|---------|--------|-------------|-------|--------|\n| Inline ghost-text completion | Yes | Yes | No | No | **No** |\n| Agent mode (multi-step) | Yes | Yes | Yes | Yes | Yes |\n| Multi-file reasoning | Yes | Yes | Yes | Yes | Partial |\n| MCP support | Yes | Yes | Yes | Yes | **No** |\n| VS Code Chat Participant API | Yes | N/A | Yes | No | **No** |\n| Background agents | Yes | Yes | Yes | No | **No** |\n| Browser automation | No | No | Yes (hooks) | Yes | **No** |\n| Self-review / code review | Yes | Yes (Bugbot) | No | No | **No** |\n| Test generation | Yes | Yes | Yes | Yes | **No** |\n| Next Edit Suggestions (NES) | Yes | No | No | No | **No** |\n| Custom modes/personas | No | No | No | Yes | Partial (skills) |\n| Visual workflow editor | No | No | No | No | **Yes** |\n| Memory/learning system | No | Partial | Yes (CLAUDE.md) | No | **Yes** |\n| RAG codebase search | Partial | Yes | Yes | No | **Yes** |\n| Multi-provider support | Partial | Yes | No | Yes | **Yes** |\n\n### What Competitors Do That Archon Does Not\n\n1. **Inline Code Completions (Ghost Text)** -- The single most-used AI feature in every coding extension. Copilot, Cursor, Codeium, and Tabnine all provide real-time inline suggestions as you type. Archon has zero inline completion support.\n\n2. **MCP (Model Context Protocol) Integration** -- MCP has become the industry standard for tool extensibility. Copilot, Cursor, Claude Code, and Cline all support MCP servers. This lets users plug in databases, APIs, Figma, Jira, Slack, etc. without the extension itself needing to implement each integration.\n\n3. **VS Code Chat Participant API** -- VS Code's official agent extensibility mechanism. Claude Code and Copilot register as chat participants, appearing in the native VS Code chat. This provides discoverability and integration with other agents.\n\n4. **Background / Asynchronous Agents** -- Copilot and Cursor support agents that run in the background (or in cloud VMs), producing PRs while the developer works on other things.\n\n5. **Browser Automation** -- Cline and Claude Code can drive a browser for testing, debugging, and web scraping. VS Code 1.110 added browser-driving chat tools.\n\n6. **Automated Test Generation** -- Copilot, Cursor, and Qodo generate unit tests from existing code with a single command.\n\n7. **AI Code Review** -- Copilot self-reviews its own PRs. Cursor Bugbot reviews PRs for logic bugs and security issues. CodeRabbit processes PRs automatically.\n\n8. **Next Edit Suggestions** -- Copilot's NES predicts where you'll edit next and what the edit should be, going beyond simple completion.\n\n---\n\n## 3. Killer Features to Add (Prioritized)\n\n### Priority 1: Table Stakes (Must-Have to Compete)\n\n#### 1A. Inline Code Completions (Ghost Text)\n**Impact: Critical | Effort: High**\n\nThis is the number one feature gap. Every major competitor provides inline completions. Without it, Archon is invisible during the most common coding activity: typing code.\n\nImplementation approach:\n- Register a VS Code `InlineCompletionItemProvider`\n- Use a fast model (e.g., a small Codestral/Qwen model via OpenRouter, or the user's selected model with a dedicated completion endpoint)\n- Debounce triggers (100-200ms after keystroke pause)\n- Send surrounding context (current file + open tabs) for quality completions\n- Support multi-line completions with Tab to accept, Escape to dismiss\n- Add a setting to toggle on/off and configure the completion model separately from the chat model\n\n**Why this is a killer differentiator for Archon:** Because Archon already has the memory system, completions could be informed by learned coding preferences (from EditTracker) and RAG context, producing more personalized suggestions than generic Copilot.\n\n#### 1B. MCP Client Support\n**Impact: Critical | Effort: Medium**\n\nMCP is the universal plugin system for AI coding tools. Without it, Archon is a closed system.\n\nImplementation approach:\n- Implement MCP client (JSON-RPC over stdio/SSE)\n- Support `mcp.json` / `mcp-settings.json` configuration files\n- Expose MCP tools to the agent loop as additional `ToolDefinition` entries\n- Support MCP resources (for context injection) and prompts (for skill-like templates)\n- Add UI for managing MCP servers (enable/disable, view available tools)\n\n**Why this matters:** A single integration unlocks hundreds of community-built tools (GitHub, Jira, Figma, databases, documentation, etc.).\n\n#### 1C. VS Code Chat Participant Registration\n**Impact: High | Effort: Medium**\n\nRegister Archon as a VS Code Chat Participant so users can `@archon` in the native VS Code chat panel.\n\nImplementation approach:\n- Use `vscode.chat.createChatParticipant('archon', handler)`\n- Map chat requests to the existing agent loop\n- Support `@archon /pipeline`, `@archon /skill`, `@archon /memory` sub-commands\n- Provide follow-up suggestions\n\n**Why this matters:** It makes Archon discoverable alongside Copilot and Claude Code in the same chat panel, and benefits from VS Code's built-in chat UX improvements.\n\n---\n\n### Priority 2: High-Impact Differentiators\n\n#### 2A. Automated Test Generation\n**Impact: High | Effort: Medium**\n\nAdd a command/tool that generates unit tests for selected code, a function, or an entire file.\n\nImplementation approach:\n- Add a VS Code command `archon.generateTests` that works on selection or file\n- Use the agent loop with a specialized system prompt for test generation\n- Leverage LSP to understand imports, types, and dependencies\n- Auto-detect test framework (Jest, pytest, JUnit, etc.) from project config\n- Optionally run tests after generation and iterate if they fail\n\n#### 2B. AI Code Review\n**Impact: High | Effort: Medium**\n\nReview staged git changes or a PR and provide feedback.\n\nImplementation approach:\n- Add `archon.reviewChanges` command\n- Gather git diff, feed to LLM with code review prompt\n- Present findings inline (as VS Code diagnostics) or in a summary panel\n- Support reviewing against project rules/memory preferences\n- Integrate with the memory system to learn review patterns\n\n#### 2C. Background Agents\n**Impact: High | Effort: High**\n\nAllow agents to run in the background while the developer continues working.\n\nImplementation approach:\n- Fork agent loop execution into a background worker\n- Show progress in status bar with notification on completion\n- Allow multiple concurrent background tasks\n- Present results as a diff/PR when complete\n- Use git worktrees or branches for isolation\n\n#### 2D. Browser Automation Tool\n**Impact: Medium-High | Effort: Medium**\n\nAdd a `browser` tool that can navigate, screenshot, click, and extract content from web pages.\n\nImplementation approach:\n- Integrate Playwright (already available as an MCP server, but a native tool would be faster)\n- Add tools: `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_extract`\n- Use for: debugging web apps, testing UI changes, scraping documentation\n- Show screenshots inline in the chat\n\n---\n\n### Priority 3: Unique Differentiators (Stand-Out Features)\n\n#### 3A. Memory-Powered Smart Completions\n**Impact: High | Effort: Medium (builds on 1A)**\n\nLeverage Archon's memory system (EditTracker preferences, session history, code graph) to personalize inline completions.\n\nNo other competitor has this. Copilot knows your current file; Archon knows your coding style, past decisions, and architectural patterns.\n\n- Inject relevant memory context (preferences, recent patterns) into completion prompts\n- Weight suggestions by alignment with learned style preferences\n- Show a subtle indicator when a completion was memory-informed\n\n#### 3B. Pipeline Marketplace / Sharing\n**Impact: Medium | Effort: Low-Medium**\n\nArchon's visual pipeline editor is unique. Make it shareable.\n\n- Export pipelines as `.archon-pipeline.json` files\n- Import from URL or file\n- Create a community gallery (GitHub repo or simple web page)\n- Curated pipeline templates for common workflows (TDD, code review, refactoring, documentation generation)\n\n#### 3C. Context-Aware Command Palette\n**Impact: Medium | Effort: Low**\n\nAdd an `archon.quickAction` command that presents context-aware actions based on the current selection, file type, and git state.\n\nExamples:\n- On a function: \"Explain\", \"Generate tests\", \"Refactor\", \"Add documentation\"\n- On a test file: \"Run tests\", \"Add missing test cases\", \"Generate mocks\"\n- On staged changes: \"Review changes\", \"Generate commit message\", \"Create PR description\"\n- On an error diagnostic: \"Fix this error\", \"Explain this error\"\n\n#### 3D. Interactive Debugging Agent\n**Impact: Medium-High | Effort: High**\n\nAn agent mode specifically for debugging that can:\n- Read error traces and stack traces\n- Set breakpoints programmatically\n- Inspect variables at runtime (via VS Code debug adapter)\n- Propose and test fixes iteratively\n- Learn from resolved bugs (via memory system)\n\n#### 3E. Multi-Repository Understanding\n**Impact: Medium | Effort: Medium**\n\nFor monorepos and multi-repo setups:\n- Index multiple workspace folders\n- Understand cross-package dependencies\n- Navigate across repository boundaries\n- Track shared types and interfaces\n\n#### 3F. Streaming Edit Preview\n**Impact: Medium | Effort: Medium**\n\nInstead of showing edits after they're complete, stream the proposed edit in real-time as a live diff overlay on the actual file, similar to how Cursor shows edits.\n\n---\n\n### Priority 4: Polish & Growth Features\n\n#### 4A. Ollama / Local Model Support\n**Impact: Medium | Effort: Low**\n\nAdd first-class support for Ollama and other local model servers (LM Studio, llama.cpp). Many developers want offline/private AI coding.\n\n- Add Ollama provider (OpenAI-compatible API)\n- Auto-detect running Ollama instance\n- Model discovery from Ollama library\n- Separate completion model vs chat model settings\n\n#### 4B. Git Integration Enhancement\n**Impact: Medium | Effort: Low-Medium**\n\n- Auto-generate commit messages from staged changes\n- Generate PR descriptions\n- Interactive rebase assistant\n- Conflict resolution helper\n- Branch naming suggestions\n\n#### 4C. Documentation Generation\n**Impact: Medium | Effort: Low**\n\n- Generate JSDoc/TSDoc/docstrings for functions\n- Generate README from codebase analysis\n- Generate API documentation\n- Generate architecture diagrams (Mermaid) from code graph\n\n#### 4D. Keyboard-First UX\n**Impact: Medium | Effort: Low**\n\n- `Ctrl+Shift+A` to quick-chat inline (floating input at cursor position)\n- `Ctrl+.` integration for AI-powered quick fixes alongside VS Code's built-in ones\n- Vim-style keybinding mode for power users\n- Slash commands in chat for common actions\n\n#### 4E. Token Cost Tracking & Analytics\n**Impact: Low-Medium | Effort: Low**\n\n- Track token usage per session, per day, per model\n- Show estimated cost in real-time\n- Budget alerts\n- Usage analytics dashboard (already partially exists via benchmarks panel)\n\n---\n\n## 4. Recommended Implementation Roadmap\n\n### Phase 1: Foundation (Weeks 1-4)\n1. **Inline Code Completions** (1A) -- the biggest gap\n2. **MCP Client Support** (1B) -- unlocks the ecosystem\n3. **Ollama/Local Model Support** (4A) -- low effort, high demand\n\n### Phase 2: Differentiation (Weeks 5-8)\n4. **Memory-Powered Smart Completions** (3A) -- unique selling point\n5. **Test Generation** (2A) -- high demand feature\n6. **Context-Aware Command Palette** (3C) -- low effort, high polish\n7. **Git Integration Enhancement** (4B) -- natural extension\n\n### Phase 3: Competitive Parity (Weeks 9-12)\n8. **AI Code Review** (2B) -- growing market expectation\n9. **VS Code Chat Participant** (1C) -- discoverability\n10. **Browser Automation** (2D) -- agentic capability\n\n### Phase 4: Leadership (Weeks 13-16)\n11. **Background Agents** (2C) -- premium feature\n12. **Pipeline Marketplace** (3B) -- community growth\n13. **Interactive Debugging Agent** (3D) -- advanced capability\n14. **Streaming Edit Preview** (3F) -- UX polish\n\n---\n\n## 5. Strategic Positioning\n\n### Archon's Unique Advantages Over Competitors\n\n1. **Memory System** -- No competitor has a comparable local, privacy-first memory system with session tracking, preference learning, and code graph understanding. This is Archon's strongest moat.\n\n2. **Visual Pipeline Editor** -- No other AI coding extension offers a visual workflow/DAG editor. This is powerful for teams that want reproducible, shareable AI workflows.\n\n3. **Skills System** -- More flexible than Copilot's custom instructions or Cursor's rules files. Skills with triggers, scripts, and versioning are a real differentiator.\n\n4. **Hooks System** -- Similar to GitHub Copilot's hooks but already more mature with variable stores, templates, and a visual debug panel.\n\n5. **True Multi-Provider** -- Supporting OpenRouter + OpenAI + Claude CLI gives users more flexibility than any single-vendor solution.\n\n### Recommended Tagline Focus\n\n**\"The AI coding assistant that learns how you code.\"**\n\nPosition Archon as the intelligent, memory-first AI assistant that gets better over time, understands your entire codebase deeply, and lets you build custom workflows -- all while supporting any LLM provider.\n\n---\n\n## 6. Sources\n\n- [Top 10 AI Code Assistants for VS Code in 2026](https://www.secondtalent.com/resources/ai-code-assistants-for-visual-studio-code/)\n- [Best AI Coding Assistants 2026 - PlayCode](https://playcode.io/blog/best-ai-coding-assistants-2026)\n- [Cursor Features](https://cursor.com/features)\n- [Cursor AI Editor: The 2026 Developer's Power Tool](https://nerdleveltech.com/cursor-ai-editor-the-2026-developers-power-tool)\n- [GitHub Copilot Agent Mode](https://github.com/newsroom/press-releases/agent-mode)\n- [What's New with GitHub Copilot Coding Agent](https://github.blog/ai-and-ml/github-copilot/whats-new-with-github-copilot-coding-agent/)\n- [Claude Code Overview](https://code.claude.com/docs/en/overview)\n- [Claude Code VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code)\n- [Cline - Autonomous AI Coding Agent](https://cline.bot/)\n- [Roo Code Review 2026](https://vibecoding.app/blog/roo-code-review)\n- [Augment Code](https://www.augmentcode.com/)\n- [VS Code AI Extensibility Overview](https://code.visualstudio.com/api/extension-guides/ai/ai-extensibility-overview)\n- [VS Code Chat Participant API](https://code.visualstudio.com/api/extension-guides/ai/chat)\n- [VS Code MCP Developer Guide](https://code.visualstudio.com/api/extension-guides/ai/mcp)\n- [MCP Apps Support in VS Code](https://code.visualstudio.com/blogs/2026/01/26/mcp-apps-support)\n- [Model Context Protocol](https://modelcontextprotocol.io/specification/2025-11-25)\n- [VS Code Multi-Agent Development](https://code.visualstudio.com/blogs/2026/02/05/multi-agent-development)\n- [Inline Suggestions from GitHub Copilot](https://code.visualstudio.com/docs/copilot/ai-powered-suggestions)\n- [Best AI Code Review Tools 2026 - Qodo](https://www.qodo.ai/blog/best-ai-code-review-tools-2026/)\n- [Developer Workflows with AI Tools 2026](https://vibecoding.app/blog/developer-workflows-with-ai)\n- [Best AI Coding Agents 2026 - Faros AI](https://www.faros.ai/blog/best-ai-coding-agents-2026)\n"}], "grading": {"eval_id": 0, "eval_name": "archon-killer-features", "run_type": "without_skill", "expectations": [{"text": "Report references specific Archon features/code (e.g., memory system, pipeline editor, tools) \u00e2\u20ac\u201d not generic advice", "passed": true, "evidence": "Report has an extremely detailed feature inventory listing all 14 core + 8 extended tools by name, all memory system phases (A-H), pipeline node types, skills system features, hooks system, security levels, and UI components. Possibly MORE detailed than the with-skill version in raw feature enumeration."}, {"text": "Report includes at least 5 numbered inline citations [N] linked to a Sources section with real URLs", "passed": false, "evidence": "Report has a Sources section with 21 URLs, but they are NOT referenced inline with numbered citations [N]. The sources are listed at the end as a bibliography, but no inline citations appear anywhere in the report body. The reader cannot tell which claims are backed by which sources."}, {"text": "Report discusses features from at least 3 competing AI coding extensions", "passed": true, "evidence": "Has a detailed competitive matrix table comparing Copilot, Cursor, Claude Code, and Cline across 14 feature dimensions. Also discusses Codeium, Tabnine, Roo Code, Augment Code. At least 8 competitors analyzed."}, {"text": "Report provides at least 3 specific, actionable feature recommendations", "passed": true, "evidence": "Provides 17+ recommendations organized in 4 priority tiers with specific implementation approaches: Inline completions (with InlineCompletionItemProvider details), MCP Client Support (JSON-RPC over stdio/SSE), VS Code Chat Participant (createChatParticipant API call), Test Generation, AI Code Review, Background Agents, Browser Automation, Memory-Powered Smart Completions, Pipeline Marketplace, and more. Each has Impact/Effort ratings."}, {"text": "Report surfaces at least 1 trade-off or counter-argument", "passed": false, "evidence": "No dedicated counter-arguments or contradictions section. Brief mentions of trade-offs are implicit (e.g., effort vs impact ratings) but no explicit analysis of arguments AGAINST the recommendations. No section on feature bloat risks, potential downsides, or contested evidence."}, {"text": "Report follows structured format with executive summary, themed sections, and sources", "passed": true, "evidence": "Has numbered sections (1-6): Current Feature Inventory, Competitive Landscape, Killer Features (4 priority tiers), Implementation Roadmap, Strategic Positioning, Sources. Well-organized with tables, headers, and clear structure. However, uses a product roadmap format rather than a research report format \u00e2\u20ac\u201d no executive summary at the top."}, {"text": "Report includes sources from 2025 or 2026", "passed": true, "evidence": "Sources include '2026' in many titles/URLs: 'AI Code Assistants for VS Code in 2026', 'Cursor AI Editor: The 2026', 'Best AI Coding Agents 2026', etc. VS Code blog posts from January and February 2026."}], "pass_rate": 0.714, "summary": "5 of 7 assertions passed. Failed on: (1) inline citations \u00e2\u20ac\u201d has sources but no [N] references in text, (2) counter-arguments \u00e2\u20ac\u201d no dedicated trade-off analysis. The baseline report is structured more as a product roadmap than a research report, with stronger implementation detail but weaker evidence traceability and intellectual honesty."}}], "previous_feedback": {}, "previous_outputs": {}, "benchmark": {"skill_name": "research", "iteration": 1, "configurations": [{"name": "with_skill", "label": "With Research Skill", "evals": [{"eval_name": "archon-killer-features", "pass_rate": 1.0, "passed": 7, "total": 7, "duration_seconds": 299.0, "total_tokens": 57966, "assertions": [{"text": "Codebase awareness", "passed": true}, {"text": "Inline citations [N]", "passed": true}, {"text": "Competitor analysis (3+)", "passed": true}, {"text": "Actionable recommendations (3+)", "passed": true}, {"text": "Counter-arguments/trade-offs", "passed": true}, {"text": "Structured report format", "passed": true}, {"text": "Recent sources (2025-2026)", "passed": true}]}], "aggregate": {"mean_pass_rate": 1.0, "stddev_pass_rate": 0, "mean_duration_seconds": 299.0, "mean_tokens": 57966}}, {"name": "without_skill", "label": "Baseline (No Skill)", "evals": [{"eval_name": "archon-killer-features", "pass_rate": 0.714, "passed": 5, "total": 7, "duration_seconds": 212.5, "total_tokens": 69402, "assertions": [{"text": "Codebase awareness", "passed": true}, {"text": "Inline citations [N]", "passed": false}, {"text": "Competitor analysis (3+)", "passed": true}, {"text": "Actionable recommendations (3+)", "passed": true}, {"text": "Counter-arguments/trade-offs", "passed": false}, {"text": "Structured report format", "passed": true}, {"text": "Recent sources (2025-2026)", "passed": true}]}], "aggregate": {"mean_pass_rate": 0.714, "stddev_pass_rate": 0, "mean_duration_seconds": 212.5, "mean_tokens": 69402}}], "delta": {"pass_rate_improvement": 0.286, "duration_increase_seconds": 86.5, "token_savings": 11436}}};
+
+    // ---- State ----
+    let feedbackMap = {};  // run_id -> feedback text
+    let currentIndex = 0;
+    let visitedRuns = new Set();
+
+    // ---- Init ----
+    async function init() {
+      // Load saved feedback from server — but only if this isn't a fresh
+      // iteration (indicated by previous_feedback being present). When
+      // previous feedback exists, the feedback.json on disk is stale from
+      // the prior iteration and should not pre-fill the textareas.
+      const hasPrevious = Object.keys(EMBEDDED_DATA.previous_feedback || {}).length > 0
+        || Object.keys(EMBEDDED_DATA.previous_outputs || {}).length > 0;
+      if (!hasPrevious) {
+        try {
+          const resp = await fetch("/api/feedback");
+          const data = await resp.json();
+          if (data.reviews) {
+            for (const r of data.reviews) feedbackMap[r.run_id] = r.feedback;
+          }
+        } catch { /* first run, no feedback yet */ }
+      }
+
+      document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      showRun(0);
+
+      // Wire up feedback auto-save
+      const textarea = document.getElementById("feedback");
+      let saveTimeout = null;
+      textarea.addEventListener("input", () => {
+        clearTimeout(saveTimeout);
+        document.getElementById("feedback-status").textContent = "";
+        saveTimeout = setTimeout(() => saveCurrentFeedback(), 800);
+      });
+    }
+
+    // ---- Navigation ----
+    function navigate(delta) {
+      const newIndex = currentIndex + delta;
+      if (newIndex >= 0 && newIndex < EMBEDDED_DATA.runs.length) {
+        saveCurrentFeedback();
+        showRun(newIndex);
+      }
+    }
+
+    function updateNavButtons() {
+      document.getElementById("prev-btn").disabled = currentIndex === 0;
+      document.getElementById("next-btn").disabled =
+        currentIndex === EMBEDDED_DATA.runs.length - 1;
+    }
+
+    // ---- Show a run ----
+    function showRun(index) {
+      currentIndex = index;
+      const run = EMBEDDED_DATA.runs[index];
+
+      // Progress
+      document.getElementById("progress").textContent =
+        `${index + 1} of ${EMBEDDED_DATA.runs.length}`;
+
+      // Prompt
+      document.getElementById("prompt-text").textContent = run.prompt;
+
+      // Config badge
+      const badge = document.getElementById("config-badge");
+      const configMatch = run.id.match(/(with_skill|without_skill|new_skill|old_skill)/);
+      if (configMatch) {
+        const config = configMatch[1];
+        const isBaseline = config === "without_skill" || config === "old_skill";
+        badge.textContent = config.replace(/_/g, " ");
+        badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
+        badge.style.display = "inline-block";
+      } else {
+        badge.style.display = "none";
+      }
+
+      // Outputs
+      renderOutputs(run);
+
+      // Previous outputs
+      renderPrevOutputs(run);
+
+      // Grades
+      renderGrades(run);
+
+      // Previous feedback
+      const prevFb = (EMBEDDED_DATA.previous_feedback || {})[run.id];
+      const prevEl = document.getElementById("prev-feedback");
+      if (prevFb) {
+        document.getElementById("prev-feedback-text").textContent = prevFb;
+        prevEl.style.display = "block";
+      } else {
+        prevEl.style.display = "none";
+      }
+
+      // Feedback
+      document.getElementById("feedback").value = feedbackMap[run.id] || "";
+      document.getElementById("feedback-status").textContent = "";
+
+      updateNavButtons();
+
+      // Track visited runs and promote done button when all visited
+      visitedRuns.add(index);
+      const doneBtn = document.getElementById("done-btn");
+      if (visitedRuns.size >= EMBEDDED_DATA.runs.length) {
+        doneBtn.classList.add("ready");
+      }
+
+      // Scroll main content to top
+      document.querySelector(".main").scrollTop = 0;
+    }
+
+    // ---- Render outputs ----
+    function renderOutputs(run) {
+      const container = document.getElementById("outputs-body");
+      container.innerHTML = "";
+
+      const outputs = run.outputs || [];
+      if (outputs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No output files</div>';
+        return;
+      }
+
+      for (const file of outputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        // Always show file header with download link
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const content = document.createElement("div");
+        content.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          content.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          content.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          content.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(content, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          content.appendChild(a);
+        } else if (file.type === "error") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          pre.style.color = "var(--red)";
+          content.appendChild(pre);
+        }
+
+        fileDiv.appendChild(content);
+        container.appendChild(fileDiv);
+      }
+    }
+
+    // ---- XLSX rendering via SheetJS ----
+    function renderXlsx(container, b64Data) {
+      try {
+        const raw = Uint8Array.from(atob(b64Data), c => c.charCodeAt(0));
+        const wb = XLSX.read(raw, { type: "array" });
+
+        for (let i = 0; i < wb.SheetNames.length; i++) {
+          const sheetName = wb.SheetNames[i];
+          const ws = wb.Sheets[sheetName];
+
+          if (wb.SheetNames.length > 1) {
+            const sheetLabel = document.createElement("div");
+            sheetLabel.style.cssText =
+              "font-weight:600; font-size:0.8rem; color:#b0aea5; margin-top:0.5rem; margin-bottom:0.25rem;";
+            sheetLabel.textContent = "Sheet: " + sheetName;
+            container.appendChild(sheetLabel);
+          }
+
+          const htmlStr = XLSX.utils.sheet_to_html(ws, { editable: false });
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = htmlStr;
+          container.appendChild(wrapper);
+        }
+      } catch (err) {
+        container.textContent = "Error rendering spreadsheet: " + err.message;
+      }
+    }
+
+    // ---- Grades ----
+    function renderGrades(run) {
+      const section = document.getElementById("grades-section");
+      const content = document.getElementById("grades-content");
+
+      if (!run.grading) {
+        section.style.display = "none";
+        return;
+      }
+
+      const grading = run.grading;
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("grades-arrow").classList.remove("open");
+
+      const summary = grading.summary || {};
+      const expectations = grading.expectations || [];
+
+      let html = '<div style="padding: 1rem;">';
+
+      // Summary line
+      const passRate = summary.pass_rate != null
+        ? Math.round(summary.pass_rate * 100) + "%"
+        : "?";
+      const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
+      html += '<div class="grades-summary">';
+      html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
+      html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
+      html += '</div>';
+
+      // Assertions list
+      html += '<ul class="assertion-list">';
+      for (const exp of expectations) {
+        const statusClass = exp.passed ? "pass" : "fail";
+        const statusIcon = exp.passed ? "\u2713" : "\u2717";
+        html += '<li class="assertion-item">';
+        html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+        html += '<span>' + escapeHtml(exp.text) + '</span>';
+        if (exp.evidence) {
+          html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+        }
+        html += '</li>';
+      }
+      html += '</ul>';
+
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    function toggleGrades() {
+      const content = document.getElementById("grades-content");
+      const arrow = document.getElementById("grades-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Previous outputs (collapsible) ----
+    function renderPrevOutputs(run) {
+      const section = document.getElementById("prev-outputs-section");
+      const content = document.getElementById("prev-outputs-content");
+      const prevOutputs = (EMBEDDED_DATA.previous_outputs || {})[run.id];
+
+      if (!prevOutputs || prevOutputs.length === 0) {
+        section.style.display = "none";
+        return;
+      }
+
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("prev-outputs-arrow").classList.remove("open");
+
+      // Render the files into the content area
+      content.innerHTML = "";
+      const wrapper = document.createElement("div");
+      wrapper.style.padding = "1rem";
+
+      for (const file of prevOutputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const fc = document.createElement("div");
+        fc.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          fc.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          fc.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          fc.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(fc, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          fc.appendChild(a);
+        }
+
+        fileDiv.appendChild(fc);
+        wrapper.appendChild(fileDiv);
+      }
+
+      content.appendChild(wrapper);
+    }
+
+    function togglePrevOutputs() {
+      const content = document.getElementById("prev-outputs-content");
+      const arrow = document.getElementById("prev-outputs-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Feedback (saved to server -> feedback.json) ----
+    function saveCurrentFeedback() {
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // Build reviews array from map
+      const reviews = [];
+      for (const [run_id, feedback] of Object.entries(feedbackMap)) {
+        if (feedback.trim()) {
+          reviews.push({ run_id, feedback, timestamp: new Date().toISOString() });
+        }
+      }
+
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviews, status: "in_progress" }),
+      }).then(() => {
+        document.getElementById("feedback-status").textContent = "Saved";
+      }).catch(() => {
+        // Static mode or server unavailable — no-op on auto-save,
+        // feedback will be downloaded on final submit
+        document.getElementById("feedback-status").textContent = "Will download on submit";
+      });
+    }
+
+    // ---- Done ----
+    function showDoneDialog() {
+      // Save current textarea to feedbackMap (but don't POST yet)
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // POST once with status: complete — include ALL runs so the model
+      // can distinguish "no feedback" (looks good) from "not reviewed"
+      const reviews = [];
+      const ts = new Date().toISOString();
+      for (const r of EMBEDDED_DATA.runs) {
+        reviews.push({ run_id: r.id, feedback: feedbackMap[r.id] || "", timestamp: ts });
+      }
+      const payload = JSON.stringify({ reviews, status: "complete" }, null, 2);
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      }).then(() => {
+        document.getElementById("done-overlay").classList.add("visible");
+      }).catch(() => {
+        // Server not available (static mode) — download as file
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "feedback.json";
+        a.click();
+        URL.revokeObjectURL(url);
+        document.getElementById("done-overlay").classList.add("visible");
+      });
+    }
+
+    function closeDoneDialog() {
+      // Reset status back to in_progress
+      saveCurrentFeedback();
+      document.getElementById("done-overlay").classList.remove("visible");
+    }
+
+    // ---- Toast ----
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 2000);
+    }
+
+    // ---- Keyboard nav ----
+    document.addEventListener("keydown", (e) => {
+      // Don't capture when typing in textarea
+      if (e.target.tagName === "TEXTAREA") return;
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        navigate(-1);
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        navigate(1);
+      }
+    });
+
+    // ---- Util ----
+    function getDownloadUri(file) {
+      if (file.data_uri) return file.data_uri;
+      if (file.data_b64) return "data:application/octet-stream;base64," + file.data_b64;
+      if (file.type === "text") return "data:text/plain;charset=utf-8," + encodeURIComponent(file.content);
+      return "#";
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ---- View switching ----
+    function switchView(view) {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+      document.querySelector(`[onclick="switchView('${view}')"]`).classList.add("active");
+      document.getElementById("panel-" + view).classList.add("active");
+    }
+
+    // ---- Benchmark rendering ----
+    function renderBenchmark() {
+      const data = EMBEDDED_DATA.benchmark;
+      if (!data) return;
+
+      // Show the tabs
+      document.getElementById("view-tabs").style.display = "flex";
+
+      const container = document.getElementById("benchmark-content");
+      const summary = data.run_summary || {};
+      const metadata = data.metadata || {};
+      const notes = data.notes || [];
+
+      let html = "";
+
+      // Header
+      html += "<h2 style='font-family: Poppins, sans-serif; margin-bottom: 0.5rem;'>Benchmark Results</h2>";
+      html += "<p style='color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;'>";
+      if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
+      if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
+      if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
+      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
+      html += "</p>";
+
+      // Summary table
+      html += '<table class="benchmark-table">';
+
+      function fmtStat(stat, pct) {
+        if (!stat) return "—";
+        const suffix = pct ? "%" : "";
+        const m = pct ? (stat.mean * 100).toFixed(0) : stat.mean.toFixed(1);
+        const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
+        return m + suffix + " ± " + s + suffix;
+      }
+
+      function deltaClass(val) {
+        if (!val) return "";
+        const n = parseFloat(val);
+        if (n > 0) return "benchmark-delta-positive";
+        if (n < 0) return "benchmark-delta-negative";
+        return "";
+      }
+
+      // Discover config names dynamically (everything except "delta")
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "config_a";
+      const configB = configs[1] || "config_b";
+      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
+      const delta = summary.delta || {};
+
+      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
+      html += "<tbody>";
+
+      html += "<tr><td><strong>Pass Rate</strong></td>";
+      html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
+      html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
+      html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
+
+      // Time (only show row if data exists)
+      if (a.time_seconds || b.time_seconds) {
+        html += "<tr><td><strong>Time (s)</strong></td>";
+        html += "<td>" + fmtStat(a.time_seconds, false) + "</td>";
+        html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
+      }
+
+      // Tokens (only show row if data exists)
+      if (a.tokens || b.tokens) {
+        html += "<tr><td><strong>Tokens</strong></td>";
+        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
+        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
+      }
+
+      html += "</tbody></table>";
+
+      // Per-eval breakdown (if runs data available)
+      const runs = data.runs || [];
+      if (runs.length > 0) {
+        const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
+
+        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
+
+        const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
+
+        for (const evalId of evalIds) {
+          const evalRuns = runs.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+
+          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
+          html += '<table class="benchmark-table">';
+          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
+          if (hasTime) html += "<th>Time (s)</th>";
+          if (hasErrors) html += "<th>Crashes During Execution</th>";
+          html += "</tr></thead>";
+          html += "<tbody>";
+
+          // Group by config and render with average rows
+          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
+          for (let ci = 0; ci < configGroups.length; ci++) {
+            const config = configGroups[ci];
+            const configRuns = evalRuns.filter(r => r.configuration === config);
+            if (configRuns.length === 0) continue;
+
+            const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
+            const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+            for (const run of configRuns) {
+              const r = run.result || {};
+              const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
+              html += '<tr class="' + rowClass + '">';
+              html += "<td>" + configLabel + "</td>";
+              html += "<td>" + run.run_number + "</td>";
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
+              if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
+              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
+              html += "</tr>";
+            }
+
+            // Average row
+            const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
+            const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+            const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '">';
+            html += "<td>" + configLabel + "</td>";
+            html += "<td>Avg</td>";
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + "%</td>";
+            if (hasTime) {
+              const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
+              html += "<td>" + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + "</td>";
+            }
+            if (hasErrors) html += "<td></td>";
+            html += "</tr>";
+          }
+          html += "</tbody></table>";
+
+          // Per-assertion detail for this eval
+          const runsWithExpectations = {};
+          for (const config of configGroups) {
+            runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
+          }
+          const hasAnyExpectations = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExpectations) {
+            // Collect all unique assertion texts across all configs
+            const allAssertions = [];
+            const seen = new Set();
+            for (const config of configGroups) {
+              for (const run of runsWithExpectations[config]) {
+                for (const exp of (run.expectations || [])) {
+                  if (!seen.has(exp.text)) {
+                    seen.add(exp.text);
+                    allAssertions.push(exp.text);
+                  }
+                }
+              }
+            }
+
+            html += '<table class="benchmark-table" style="margin-top: 0.5rem;">';
+            html += "<thead><tr><th>Assertion</th>";
+            for (const config of configGroups) {
+              const label = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+              html += "<th>" + escapeHtml(label) + "</th>";
+            }
+            html += "</tr></thead><tbody>";
+
+            for (const assertionText of allAssertions) {
+              html += "<tr><td>" + escapeHtml(assertionText) + "</td>";
+
+              for (const config of configGroups) {
+                html += "<td>";
+                for (const run of runsWithExpectations[config]) {
+                  const exp = (run.expectations || []).find(e => e.text === assertionText);
+                  if (exp) {
+                    const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
+                    const icon = exp.passed ? "\u2713" : "\u2717";
+                    html += '<span class="' + cls + '" title="Run ' + run.run_number + ': ' + escapeHtml(exp.evidence || "") + '">' + icon + "</span> ";
+                  } else {
+                    html += "— ";
+                  }
+                }
+                html += "</td>";
+              }
+              html += "</tr>";
+            }
+            html += "</tbody></table>";
+          }
+        }
+      }
+
+      // Notes
+      if (notes.length > 0) {
+        html += '<div class="benchmark-notes">';
+        html += "<h3>Analysis Notes</h3>";
+        html += "<ul>";
+        for (const note of notes) {
+          html += "<li>" + escapeHtml(note) + "</li>";
+        }
+        html += "</ul></div>";
+      }
+
+      container.innerHTML = html;
+    }
+
+    // ---- Start ----
+    init();
+    renderBenchmark();
+  </script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "skill_name": "research",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "how can we make the Archon VS Code extension better and what killer features should we add",
+      "expected_output": "A structured research report with codebase-aware recommendations, competitor analysis, citations, and honest trade-offs",
+      "files": [],
+      "assertions": [
+        {
+          "id": "codebase-awareness",
+          "text": "Report references specific Archon features/code (e.g., memory system, pipeline editor, tools) — not generic advice"
+        },
+        {
+          "id": "citations-present",
+          "text": "Report includes at least 5 numbered inline citations [N] linked to a Sources section with real URLs"
+        },
+        {
+          "id": "competitor-analysis",
+          "text": "Report discusses features from at least 3 competing AI coding extensions"
+        },
+        {
+          "id": "actionable-recommendations",
+          "text": "Report provides at least 3 specific, actionable feature recommendations"
+        },
+        {
+          "id": "contradictions-or-tradeoffs",
+          "text": "Report surfaces at least 1 trade-off or counter-argument"
+        },
+        {
+          "id": "structured-report",
+          "text": "Report follows structured format with executive summary, themed sections, and sources"
+        },
+        {
+          "id": "recency",
+          "text": "Report includes sources from 2025 or 2026"
+        }
+      ]
+    }
+  ]
+}

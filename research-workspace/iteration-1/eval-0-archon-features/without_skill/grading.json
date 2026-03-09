@@ -1,0 +1,44 @@
+{
+  "eval_id": 0,
+  "eval_name": "archon-killer-features",
+  "run_type": "without_skill",
+  "expectations": [
+    {
+      "text": "Report references specific Archon features/code (e.g., memory system, pipeline editor, tools) — not generic advice",
+      "passed": true,
+      "evidence": "Report has an extremely detailed feature inventory listing all 14 core + 8 extended tools by name, all memory system phases (A-H), pipeline node types, skills system features, hooks system, security levels, and UI components. Possibly MORE detailed than the with-skill version in raw feature enumeration."
+    },
+    {
+      "text": "Report includes at least 5 numbered inline citations [N] linked to a Sources section with real URLs",
+      "passed": false,
+      "evidence": "Report has a Sources section with 21 URLs, but they are NOT referenced inline with numbered citations [N]. The sources are listed at the end as a bibliography, but no inline citations appear anywhere in the report body. The reader cannot tell which claims are backed by which sources."
+    },
+    {
+      "text": "Report discusses features from at least 3 competing AI coding extensions",
+      "passed": true,
+      "evidence": "Has a detailed competitive matrix table comparing Copilot, Cursor, Claude Code, and Cline across 14 feature dimensions. Also discusses Codeium, Tabnine, Roo Code, Augment Code. At least 8 competitors analyzed."
+    },
+    {
+      "text": "Report provides at least 3 specific, actionable feature recommendations",
+      "passed": true,
+      "evidence": "Provides 17+ recommendations organized in 4 priority tiers with specific implementation approaches: Inline completions (with InlineCompletionItemProvider details), MCP Client Support (JSON-RPC over stdio/SSE), VS Code Chat Participant (createChatParticipant API call), Test Generation, AI Code Review, Background Agents, Browser Automation, Memory-Powered Smart Completions, Pipeline Marketplace, and more. Each has Impact/Effort ratings."
+    },
+    {
+      "text": "Report surfaces at least 1 trade-off or counter-argument",
+      "passed": false,
+      "evidence": "No dedicated counter-arguments or contradictions section. Brief mentions of trade-offs are implicit (e.g., effort vs impact ratings) but no explicit analysis of arguments AGAINST the recommendations. No section on feature bloat risks, potential downsides, or contested evidence."
+    },
+    {
+      "text": "Report follows structured format with executive summary, themed sections, and sources",
+      "passed": true,
+      "evidence": "Has numbered sections (1-6): Current Feature Inventory, Competitive Landscape, Killer Features (4 priority tiers), Implementation Roadmap, Strategic Positioning, Sources. Well-organized with tables, headers, and clear structure. However, uses a product roadmap format rather than a research report format — no executive summary at the top."
+    },
+    {
+      "text": "Report includes sources from 2025 or 2026",
+      "passed": true,
+      "evidence": "Sources include '2026' in many titles/URLs: 'AI Code Assistants for VS Code in 2026', 'Cursor AI Editor: The 2026', 'Best AI Coding Agents 2026', etc. VS Code blog posts from January and February 2026."
+    }
+  ],
+  "pass_rate": 0.714,
+  "summary": "5 of 7 assertions passed. Failed on: (1) inline citations — has sources but no [N] references in text, (2) counter-arguments — no dedicated trade-off analysis. The baseline report is structured more as a product roadmap than a research report, with stronger implementation detail but weaker evidence traceability and intellectual honesty."
+}

@@ -1,0 +1,44 @@
+{
+  "eval_id": 0,
+  "eval_name": "archon-killer-features",
+  "run_type": "with_skill",
+  "expectations": [
+    {
+      "text": "Report references specific Archon features/code (e.g., memory system, pipeline editor, tools) — not generic advice",
+      "passed": true,
+      "evidence": "Report has a detailed Project Context table and Current Feature Inventory. References specific components: AST chunking across 11 languages, graph builder with recursive CTEs, EditTracker, ContextMeter, pipeline editor, skills system, hooks engine, security levels (yolo/permissive/standard/strict), git checkpoints, sub-agent spawning. Recommendations build on these specific features (e.g., Architecture Guardian uses existing graph builder)."
+    },
+    {
+      "text": "Report includes at least 5 numbered inline citations [N] linked to a Sources section with real URLs",
+      "passed": true,
+      "evidence": "Report contains 24 numbered inline citations [1] through [24], each linked to the Sources section at the bottom. Sources include real URLs from IEEE Spectrum, VS Code Blog, MIT Technology Review, Shakudo, Vibehackers, etc. Citations are used naturally throughout the text (e.g., '[1][3][8]' for context degradation claims, '[2]' for Copilot agent mode, '[9]' for Cursor token reduction)."
+    },
+    {
+      "text": "Report discusses features from at least 3 competing AI coding extensions",
+      "passed": true,
+      "evidence": "Discusses: GitHub Copilot (agent mode, NES), Cursor (dynamic context, Bugbot, 46.9% token reduction), Windsurf (Cascade, Memories), Cline (UX patterns, Cmd+'), Continue (open-source comparison), Sourcegraph Cody (code intelligence), Aider (git integration), CodeRabbit (code review), Qodo (code review), Factory (autonomous agents). At least 10 competitors analyzed."
+    },
+    {
+      "text": "Report provides at least 3 specific, actionable feature recommendations",
+      "passed": true,
+      "evidence": "Provides 15+ specific recommendations organized by theme: (1) Autonomous test-fix loop with run_tests meta-tool, (2) MCP server integration (consume + expose), (3) Architecture Guardian mode using graph builder, (4) Skill Marketplace for community sharing, (5) Model A/B Testing, (6) Inline completions via InlineCompletionsAPI, (7) VS Code Chat Participant API integration, (8) AGENTS.md auto-detection, (9) Cost Dashboard, (10) Git-native workflows with /undo. Each has specific implementation guidance."
+    },
+    {
+      "text": "Report surfaces at least 1 trade-off or counter-argument",
+      "passed": true,
+      "evidence": "Has a full 'Counter-Arguments' section with 4 named counter-arguments: 'Just add inline completions and nothing else matters', 'Feature bloat kills tools', 'Self-healing test loops are dangerous', 'Memory systems add latency and complexity'. Also has a 'Contradictions & Disagreements' section with 3 items: productivity claims contested (40-60% vs 19% slower), autonomous vs supervised agents, feature richness vs simplicity."
+    },
+    {
+      "text": "Report follows structured format with executive summary, themed sections, and sources",
+      "passed": true,
+      "evidence": "Follows the skill's report template exactly: Executive Summary (5 bullet points), Project Context (table + feature inventory), 5 themed sections (Complete Loop, Context Intelligence, Multi-Agent Orchestration, DX Polish, Killer Differentiators), Counter-Arguments, Contradictions & Disagreements, Gaps & Limitations, Suggested Follow-ups, Sources (24 numbered entries with titles, URLs, dates, and relevance notes)."
+    },
+    {
+      "text": "Report includes sources from 2025 or 2026",
+      "passed": true,
+      "evidence": "23 of 24 sources are from 2025-2026. Examples: 'March 2026' (Beyond the Vibes), 'February 2026' (VS Code multi-agent blog), 'January 2026' (MCP Apps), 'December 2025' (MIT Technology Review). Source dates are explicitly listed."
+    }
+  ],
+  "pass_rate": 1.0,
+  "summary": "All 7 assertions passed. The with-skill report follows the research pipeline structure, has comprehensive inline citations, detailed competitor analysis, specific actionable recommendations, dedicated counter-argument and contradiction sections, and recent sources."
+}
