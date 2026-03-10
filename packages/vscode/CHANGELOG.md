@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 (2026-03-10)
+
+### Added
+- MCP (Model Context Protocol) support — connect to external MCP servers for additional tools, prompts, and resources
+- MCP settings UI with server configuration form, tool discovery, and enable/disable controls
+- MCP transport layer with stdio and SSE support
+- MCP tool adapter integrating external tools into the agent loop with security gating
+
 ## 0.1.5 (2026-03-08)
 
 ### Added
