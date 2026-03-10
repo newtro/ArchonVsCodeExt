@@ -45,6 +45,8 @@ const DESTRUCTIVE_PATTERNS = [
 
 export class SecurityManager {
   private config: SecurityConfig;
+  /** MCP tools approved in the current session (not persisted). */
+  private sessionApprovedMcpTools = new Set<string>();
 
   constructor(config?: Partial<SecurityConfig>) {
     this.config = {
@@ -56,10 +58,16 @@ export class SecurityManager {
   }
 
   /**
-   * Classify a terminal command into a security category.
+   * Classify a terminal command or MCP tool call into a security category.
+   * MCP tool calls use the format "mcp:serverName:toolName".
    */
   classifyCommand(command: string): CommandCategory {
     const trimmed = command.trim();
+
+    // MCP tool calls — default to mutating_remote (MCP servers can access anything)
+    if (trimmed.startsWith('mcp:')) {
+      return 'mutating_remote';
+    }
 
     if (DESTRUCTIVE_PATTERNS.some(p => p.test(trimmed))) return 'destructive';
     if (MUTATING_REMOTE_PATTERNS.some(p => p.test(trimmed))) return 'mutating_remote';
@@ -158,5 +166,38 @@ export class SecurityManager {
 
   getConfig(): SecurityConfig {
     return { ...this.config };
+  }
+
+  // ── MCP-specific security ──
+
+  /**
+   * Check an MCP tool call. Returns 'approve', 'confirm', or 'block'.
+   * Respects session-level approvals (tools approved once don't require re-confirmation
+   * until session reset in standard mode).
+   */
+  checkMcpTool(serverName: string, toolName: string, alwaysAllow?: string[]): 'approve' | 'confirm' | 'block' {
+    // Always-allow list bypasses confirmation
+    if (alwaysAllow?.includes(toolName)) return 'approve';
+
+    const key = `mcp:${serverName}:${toolName}`;
+
+    // Check session approval (for standard mode: confirm first use, then remember)
+    if (this.sessionApprovedMcpTools.has(key)) return 'approve';
+
+    return this.checkCommand(key);
+  }
+
+  /**
+   * Record that an MCP tool was approved in this session.
+   */
+  approveMcpToolForSession(serverName: string, toolName: string): void {
+    this.sessionApprovedMcpTools.add(`mcp:${serverName}:${toolName}`);
+  }
+
+  /**
+   * Clear session-level MCP approvals (on session reset).
+   */
+  clearSessionApprovals(): void {
+    this.sessionApprovedMcpTools.clear();
   }
 }

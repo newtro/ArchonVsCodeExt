@@ -310,7 +310,14 @@ export type ExtensionMessage =
   // Hooks
   | { type: 'hookConfigLoaded'; config: { chains: import('./hooks/types').HookChain[]; templates: import('./hooks/types').HookTemplate[]; variables: import('./hooks/types').VariableDefinition[]; enabled: boolean } }
   | { type: 'hookDebug'; event: import('./hooks/types').HookExecutionEvent }
-  | { type: 'hookVariables'; variables: Record<string, unknown> };
+  | { type: 'hookVariables'; variables: Record<string, unknown> }
+  // MCP
+  | { type: 'mcpServersLoaded'; servers: McpServerInfo[] }
+  | { type: 'mcpStatusChanged'; servers: McpServerInfo[] }
+  | { type: 'mcpToolsLoaded'; serverName: string; tools: McpToolInfo[] }
+  | { type: 'mcpLog'; serverName: string; message: string }
+  | { type: 'mcpError'; serverName: string; error: string }
+  | { type: 'mcpInstallResult'; config?: McpServerConfigMsg; name?: string; error?: string };
 
 export interface ProviderInfo {
   id: string;
@@ -426,7 +433,56 @@ export type WebviewMessage =
   | { type: 'saveHookConfig'; chains: import('./hooks/types').HookChain[]; variables: import('./hooks/types').VariableDefinition[]; enabled: boolean }
   | { type: 'setHooksEnabled'; enabled: boolean }
   | { type: 'exportHookConfig' }
-  | { type: 'importHookConfig' };
+  | { type: 'importHookConfig' }
+  // MCP
+  | { type: 'loadMcpServers' }
+  | { type: 'addMcpServer'; name: string; config: McpServerConfigMsg; scope: 'global' | 'project' }
+  | { type: 'removeMcpServer'; name: string; scope: 'global' | 'project' }
+  | { type: 'updateMcpServer'; name: string; config: McpServerConfigMsg; scope: 'global' | 'project' }
+  | { type: 'restartMcpServer'; name: string }
+  | { type: 'enableMcpServer'; name: string }
+  | { type: 'disableMcpServer'; name: string }
+  | { type: 'loadMcpTools'; serverName: string }
+  | { type: 'setMcpToolAlwaysLoad'; toolName: string; enabled: boolean }
+  | { type: 'setMcpToolAlwaysAllow'; serverName: string; toolName: string; enabled: boolean }
+  | { type: 'installMcpFromRepo'; url: string };
+
+// MCP UI types
+export interface McpServerInfo {
+  name: string;
+  status: 'connecting' | 'connected' | 'disconnected' | 'error';
+  error?: string;
+  transport: 'stdio' | 'http';
+  toolCount: number;
+  resourceCount: number;
+  promptCount: number;
+  disabled?: boolean;
+  config: McpServerConfigMsg;
+}
+
+export interface McpServerConfigMsg {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  disabled?: boolean;
+  alwaysAllow?: string[];
+  alwaysLoad?: string[];
+  timeout?: number;
+}
+
+export interface McpToolInfo {
+  name: string;
+  originalName: string;
+  serverName: string;
+  description: string;
+  deferred: boolean;
+  tokenEstimate: number;
+  alwaysLoad: boolean;
+  alwaysAllow: boolean;
+  paramCount: number;
+}
 
 export interface ContextMeterData {
   totalTokens: number;

@@ -85,3 +85,9 @@ export { SecurityManager } from './security/security-manager';
 export type { SecurityLevel, SecurityConfig, CommandCategory } from './security/security-manager';
 export { NetworkMonitor } from './security/network-monitor';
 export type { NetworkRequest, NetworkMonitorConfig, ThreatLevel } from './security/network-monitor';
+
+// MCP
+export { McpClientManager, McpRegistry, createTransport, getTransportType, mcpToolToArchonTool, createMcpServerTools, estimateToolTokens, createResourceTool, createPromptTool } from './mcp';
+export { loadGlobalConfig, loadProjectConfig, mergeConfigs, loadMergedConfig, saveGlobalConfig, saveProjectConfig, validateConfig, resolveConfigVars, getGlobalConfigPath, getProjectConfigPath } from './mcp';
+export type { McpTransport } from './mcp';
+export type { McpServerConfig, McpServerState, McpServerStatus, McpToolEntry, McpConfigFile, McpEvent, McpEventType, McpEventListener, ConfigValidationError } from './mcp';

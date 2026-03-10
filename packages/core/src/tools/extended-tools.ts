@@ -4,6 +4,7 @@
  */
 
 import type { ToolDefinition } from '../types';
+import type { McpRegistry } from '../mcp/mcp-registry';
 import * as https from 'https';
 import * as http from 'http';
 import * as fs from 'fs';
@@ -18,6 +19,7 @@ export function createExtendedTools(deps: {
   spawnAgent?: (systemPrompt: string, task: string, model?: string) => Promise<string>;
   showDiff?: (path: string, original: string, modified: string) => Promise<boolean>;
   braveApiKey?: string;
+  mcpRegistry?: McpRegistry;
 }): ToolDefinition[] {
   const tools: ToolDefinition[] = [
     createWebSearchTool(deps.braveApiKey),
@@ -38,7 +40,7 @@ export function createExtendedTools(deps: {
     tools.push(createDiffViewTool(deps.showDiff));
   }
 
-  tools.push(toolSearchTool);
+  tools.push(createToolSearchTool(deps.mcpRegistry));
 
   return tools;
 }
@@ -497,54 +499,85 @@ function createDiffViewTool(
 
 // ── tool_search ──
 
-const toolSearchTool: ToolDefinition = {
-  name: 'tool_search',
-  description: 'Search for available tools (core + MCP) by natural language description. Use when you need functionality beyond the core tools.',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: 'Natural language description of the tool you need' },
+const CORE_SUGGESTIONS = [
+  { name: 'read_file', desc: 'Read file contents' },
+  { name: 'write_file', desc: 'Create or overwrite files' },
+  { name: 'edit_file', desc: 'SEARCH/REPLACE edits on existing files' },
+  { name: 'search_files', desc: 'Regex/text search across codebase' },
+  { name: 'find_files', desc: 'Glob pattern file discovery' },
+  { name: 'list_directory', desc: 'List directory contents' },
+  { name: 'run_terminal', desc: 'Execute shell commands' },
+  { name: 'web_search', desc: 'Search the web' },
+  { name: 'web_fetch', desc: 'Fetch URL content' },
+  { name: 'lookup_docs', desc: 'Look up library API docs' },
+  { name: 'search_codebase', desc: 'Semantic search over code (RAG)' },
+  { name: 'search_history', desc: 'Search past interactions' },
+  { name: 'go_to_definition', desc: 'Jump to symbol definition' },
+  { name: 'find_references', desc: 'Find all usages of a symbol' },
+  { name: 'get_hover_info', desc: 'Get type info and docs for a symbol' },
+  { name: 'get_workspace_symbols', desc: 'Search symbols by name' },
+  { name: 'get_document_symbols', desc: 'Get file outline/structure' },
+  { name: 'get_code_actions', desc: 'Get quick fixes and refactorings' },
+  { name: 'get_diagnostics', desc: 'Get compiler errors and warnings' },
+  { name: 'spawn_agent', desc: 'Launch a sub-agent for a sub-task' },
+  { name: 'diff_view', desc: 'Show diff for user approval' },
+  { name: 'ask_user', desc: 'Ask the user a question' },
+  { name: 'attempt_completion', desc: 'Signal task completion' },
+];
+
+function createToolSearchTool(mcpRegistry?: McpRegistry): ToolDefinition {
+  return {
+    name: 'tool_search',
+    description: 'Search for available tools (core + MCP) by natural language description. Use when you need functionality beyond the core tools. Returns matching tool definitions that you can then call directly.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Natural language description of the tool capability you need' },
+        limit: { type: 'number', description: 'Max results to return (default 5)' },
+      },
+      required: ['query'],
     },
-    required: ['query'],
-  },
-  execute: async (args, ctx) => {
-    // This is a meta-tool that searches available tool descriptions
-    const query = (args.query as string).toLowerCase();
+    execute: async (args) => {
+      const query = (args.query as string).toLowerCase();
+      const limit = (args.limit as number) ?? 5;
+      const parts: string[] = [];
 
-    const coreSuggestions = [
-      { name: 'read_file', desc: 'Read file contents' },
-      { name: 'write_file', desc: 'Create or overwrite files' },
-      { name: 'edit_file', desc: 'SEARCH/REPLACE edits on existing files' },
-      { name: 'search_files', desc: 'Regex/text search across codebase' },
-      { name: 'find_files', desc: 'Glob pattern file discovery' },
-      { name: 'list_directory', desc: 'List directory contents' },
-      { name: 'run_terminal', desc: 'Execute shell commands' },
-      { name: 'web_search', desc: 'Search the web' },
-      { name: 'web_fetch', desc: 'Fetch URL content' },
-      { name: 'lookup_docs', desc: 'Look up library API docs' },
-      { name: 'search_codebase', desc: 'Semantic search over code (RAG)' },
-      { name: 'search_history', desc: 'Search past interactions' },
-      { name: 'go_to_definition', desc: 'Jump to symbol definition' },
-      { name: 'find_references', desc: 'Find all usages of a symbol' },
-      { name: 'get_hover_info', desc: 'Get type info and docs for a symbol' },
-      { name: 'get_workspace_symbols', desc: 'Search symbols by name' },
-      { name: 'get_document_symbols', desc: 'Get file outline/structure' },
-      { name: 'get_code_actions', desc: 'Get quick fixes and refactorings' },
-      { name: 'get_diagnostics', desc: 'Get compiler errors and warnings' },
-      { name: 'spawn_agent', desc: 'Launch a sub-agent for a sub-task' },
-      { name: 'diff_view', desc: 'Show diff for user approval' },
-      { name: 'ask_user', desc: 'Ask the user a question' },
-      { name: 'attempt_completion', desc: 'Signal task completion' },
-    ];
+      // Search core tools
+      const coreMatches = CORE_SUGGESTIONS
+        .filter(s => s.name.includes(query) || s.desc.toLowerCase().includes(query))
+        .slice(0, limit);
 
-    const matches = coreSuggestions
-      .filter(s => s.name.includes(query) || s.desc.toLowerCase().includes(query))
-      .slice(0, 5);
+      if (coreMatches.length > 0) {
+        parts.push('**Core tools:**');
+        for (const m of coreMatches) {
+          parts.push(`- **${m.name}**: ${m.desc}`);
+        }
+      }
 
-    if (matches.length === 0) {
-      return `No tools found matching "${args.query}". Available core tools: ${coreSuggestions.map(s => s.name).join(', ')}`;
-    }
+      // Search MCP tools via registry
+      if (mcpRegistry) {
+        const mcpResults = mcpRegistry.searchTools(args.query as string, limit);
+        if (mcpResults.length > 0) {
+          // Activate discovered tools so they're available on subsequent turns
+          mcpRegistry.activateTools(mcpResults.map(t => t.name));
 
-    return `Matching tools:\n${matches.map(m => `- **${m.name}**: ${m.desc}`).join('\n')}`;
-  },
-};
+          parts.push('');
+          parts.push('**MCP tools (now available to call):**');
+          for (const tool of mcpResults) {
+            const params = Object.keys(tool.parameters.properties).join(', ');
+            parts.push(`- **${tool.name}**: ${tool.description}${params ? ` (params: ${params})` : ''}`);
+          }
+
+          const counts = mcpRegistry.getToolCount();
+          parts.push(`\n_${counts.total} MCP tools available, ${counts.loaded} loaded, ${counts.deferred} deferred_`);
+        }
+      }
+
+      if (parts.length === 0) {
+        return `No tools found matching "${args.query}". Available core tools: ${CORE_SUGGESTIONS.map(s => s.name).join(', ')}`;
+      }
+
+      return parts.join('\n');
+    },
+  };
+}
