@@ -2,7 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@modelcontextprotocol/sdk/client": ["node_modules/@modelcontextprotocol/sdk/dist/cjs/client/index"],
+      "@modelcontextprotocol/sdk/client/stdio": ["node_modules/@modelcontextprotocol/sdk/dist/cjs/client/stdio"],
+      "@modelcontextprotocol/sdk/client/streamableHttp": ["node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp"],
+      "@modelcontextprotocol/sdk/client/sse": ["node_modules/@modelcontextprotocol/sdk/dist/cjs/client/sse"]
+    }
   },
   "include": ["src/**/*"]
 }

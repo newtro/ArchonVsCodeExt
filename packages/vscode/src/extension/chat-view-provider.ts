@@ -127,6 +127,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private memoryModelId: string | null = null;
   private agentModifiedFiles = new Map<string, string>(); // path → agent's content after write
   private memoryLlmReady: Promise<void> = Promise.resolve();
+  private mcpHost?: import('./mcp-extension-host').McpExtensionHost;
+  private mcpManager?: import('@archon/core').McpClientManager;
+  private mcpRegistry?: import('@archon/core').McpRegistry;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -299,6 +302,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         console.warn('[Archon] Failed to initialize skill registry:', err);
       });
     }
+
+    // Initialize MCP system
+    this.initializeMcp(workspaceRoot).catch(err => {
+      console.warn('[Archon] MCP init failed:', err);
+    });
 
     // Initialize todo status bar item
     this.todoStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
@@ -1392,6 +1400,292 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+
+      // ── MCP Server Management ──
+      case 'loadMcpServers': {
+        this.sendMcpServersToWebview();
+        break;
+      }
+      case 'addMcpServer': {
+        const addMsg = msg as WebviewMessage & { name: string; config: Record<string, unknown>; scope: 'global' | 'project' };
+        if (this.mcpHost) {
+          await this.mcpHost.addServer(addMsg.name, addMsg.config as any, addMsg.scope);
+          this.sendMcpServersToWebview();
+        }
+        break;
+      }
+      case 'removeMcpServer': {
+        const rmMsg = msg as WebviewMessage & { name: string; scope: 'global' | 'project' };
+        if (this.mcpHost) {
+          await this.mcpHost.removeServer(rmMsg.name, rmMsg.scope);
+          this.sendMcpServersToWebview();
+        }
+        break;
+      }
+      case 'updateMcpServer': {
+        const updMsg = msg as WebviewMessage & { name: string; config: Record<string, unknown>; scope: 'global' | 'project' };
+        if (this.mcpHost) {
+          await this.mcpHost.updateServer(updMsg.name, updMsg.config as any, updMsg.scope);
+          this.sendMcpServersToWebview();
+        }
+        break;
+      }
+      case 'restartMcpServer': {
+        const rstMsg = msg as WebviewMessage & { name: string };
+        if (this.mcpHost) {
+          await this.mcpHost.restartServer(rstMsg.name);
+          this.sendMcpServersToWebview();
+        }
+        break;
+      }
+      case 'enableMcpServer': {
+        const enMsg = msg as WebviewMessage & { name: string };
+        if (this.mcpHost) {
+          await this.mcpHost.enableServer(enMsg.name);
+          this.sendMcpServersToWebview();
+        }
+        break;
+      }
+      case 'disableMcpServer': {
+        const disMsg = msg as WebviewMessage & { name: string };
+        if (this.mcpHost) {
+          await this.mcpHost.disableServer(disMsg.name);
+          this.sendMcpServersToWebview();
+        }
+        break;
+      }
+      case 'loadMcpTools': {
+        const toolMsg = msg as WebviewMessage & { serverName: string };
+        this.sendMcpToolsToWebview(toolMsg.serverName);
+        break;
+      }
+      case 'setMcpToolAlwaysLoad': {
+        const alMsg = msg as WebviewMessage & { toolName: string; enabled: boolean };
+        if (this.mcpRegistry) {
+          this.mcpRegistry.setAlwaysLoad(alMsg.toolName, alMsg.enabled);
+        }
+        break;
+      }
+      case 'setMcpToolAlwaysAllow': {
+        const aaMsg = msg as WebviewMessage & { serverName: string; toolName: string; enabled: boolean };
+        if (this.mcpHost) {
+          const configs = this.mcpHost.getConfigs();
+          const cfg = configs[aaMsg.serverName];
+          if (cfg) {
+            if (!cfg.alwaysAllow) cfg.alwaysAllow = [];
+            if (aaMsg.enabled && !cfg.alwaysAllow.includes(aaMsg.toolName)) {
+              cfg.alwaysAllow.push(aaMsg.toolName);
+            } else if (!aaMsg.enabled) {
+              cfg.alwaysAllow = cfg.alwaysAllow.filter((t: string) => t !== aaMsg.toolName);
+            }
+            await this.mcpHost.updateServer(aaMsg.serverName, cfg, 'global');
+          }
+        }
+        break;
+      }
+      case 'installMcpFromRepo': {
+        const installMsg = msg as WebviewMessage & { url: string };
+        this.handleMcpInstallFromRepo(installMsg.url).catch((err: unknown) => {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          this.postMessage({ type: 'mcpInstallResult', error: errMsg } as any);
+        });
+        break;
+      }
+    }
+  }
+
+  // ── MCP Initialization & Helpers ──
+
+  private async initializeMcp(workspaceRoot: string): Promise<void> {
+    const { McpClientManager, McpRegistry } = await import('@archon/core');
+    const { McpExtensionHost } = await import('./mcp-extension-host');
+
+    this.mcpManager = new McpClientManager();
+    this.mcpRegistry = new McpRegistry();
+
+    this.mcpHost = new McpExtensionHost({
+      manager: this.mcpManager,
+      security: this.securityManager,
+      registry: this.mcpRegistry,
+      workspacePath: workspaceRoot || undefined,
+      onStatusChange: (states) => {
+        const servers = states.map(s => ({
+          ...s,
+          disabled: false,
+          config: {},
+        }));
+        this.postMessage({ type: 'mcpStatusChanged', servers } as any);
+      },
+      onToolsChange: (tools) => {
+        console.log(`[Archon] MCP tools updated: ${tools.length} tools available`);
+      },
+      onLog: (serverName, message) => {
+        console.log(`[Archon MCP] [${serverName}] ${message}`);
+      },
+    });
+
+    await this.mcpHost.initialize();
+    console.log('[Archon] MCP system initialized');
+  }
+
+  private sendMcpServersToWebview(): void {
+    if (!this.mcpHost) return;
+    const states = this.mcpHost.getServerStates();
+    const configs = this.mcpHost.getConfigs();
+    const servers = states.map(s => ({
+      name: s.name,
+      status: s.status,
+      error: s.error,
+      transport: s.transport,
+      toolCount: s.toolCount,
+      resourceCount: s.resourceCount,
+      promptCount: s.promptCount,
+      disabled: configs[s.name]?.disabled ?? false,
+      config: configs[s.name] ?? {},
+    }));
+    this.postMessage({ type: 'mcpServersLoaded', servers } as any);
+  }
+
+  private sendMcpToolsToWebview(serverName: string): void {
+    if (!this.mcpRegistry) return;
+    const entries = this.mcpRegistry.getServerEntries(serverName);
+    const configs = this.mcpHost?.getConfigs() ?? {};
+    const serverConfig = configs[serverName];
+    const alwaysAllow = new Set(serverConfig?.alwaysAllow ?? []);
+
+    const tools = entries.map(e => ({
+      name: e.name,
+      originalName: e.originalName,
+      serverName: e.serverName,
+      description: e.description,
+      deferred: e.deferred,
+      tokenEstimate: e.tokenEstimate,
+      alwaysLoad: !e.deferred,
+      alwaysAllow: alwaysAllow.has(e.originalName),
+      paramCount: 0,
+    }));
+    this.postMessage({ type: 'mcpToolsLoaded', serverName, tools } as any);
+  }
+
+  /**
+   * LLM-assisted MCP server installation.
+   * Fetches README from a GitHub URL or npm package, sends it to the LLM
+   * to extract MCP server configuration, and returns the result to the webview.
+   */
+  private async handleMcpInstallFromRepo(inputUrl: string): Promise<void> {
+    // Resolve the raw README URL
+    let readmeUrl = inputUrl;
+
+    // GitHub URL → raw README
+    const ghMatch = inputUrl.match(/github\.com\/([^/]+\/[^/]+)/);
+    if (ghMatch) {
+      readmeUrl = `https://raw.githubusercontent.com/${ghMatch[1]}/main/README.md`;
+    }
+    // npm package → npmjs README
+    else if (!inputUrl.startsWith('http')) {
+      readmeUrl = `https://www.npmjs.com/package/${inputUrl.replace(/^@/, '%40')}`;
+    }
+
+    // Fetch the README content
+    const https = await import('https');
+    const http = await import('http');
+    const readmeContent = await new Promise<string>((resolve, reject) => {
+      const mod = readmeUrl.startsWith('https') ? https : http;
+      const req = mod.get(readmeUrl, { headers: { 'User-Agent': 'Archon/1.0' } }, (res: import('http').IncomingMessage) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          // Follow redirect
+          const redirectMod = res.headers.location.startsWith('https') ? https : http;
+          redirectMod.get(res.headers.location, { headers: { 'User-Agent': 'Archon/1.0' } }, (res2: import('http').IncomingMessage) => {
+            const chunks: Buffer[] = [];
+            res2.on('data', (c: Buffer) => chunks.push(c));
+            res2.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+            res2.on('error', reject);
+          }).on('error', reject);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.setTimeout(15000, () => { req.destroy(); reject(new Error('Timeout fetching README')); });
+    });
+
+    if (!readmeContent || readmeContent.length < 50) {
+      this.postMessage({ type: 'mcpInstallResult', error: 'Could not fetch README content from the provided URL.' } as any);
+      return;
+    }
+
+    // Truncate to avoid excessive token usage
+    const truncated = readmeContent.length > 8000
+      ? readmeContent.slice(0, 8000) + '\n... (truncated)'
+      : readmeContent;
+
+    // Use the active LLM provider to extract the config
+    const provider = this.providerManager.getActive();
+    if (!provider?.simpleChat) {
+      this.postMessage({ type: 'mcpInstallResult', error: 'No LLM provider available. Configure an API key first.' } as any);
+      return;
+    }
+
+    const extractionPrompt = `You are an MCP server configuration extractor. Given a README for an MCP server, extract the configuration needed to run it.
+
+Return ONLY a JSON object with these fields:
+- "name": a short identifier for the server (lowercase, no spaces)
+- "transport": "stdio" or "http"
+- "command": the command to run (for stdio, e.g., "npx" or "node")
+- "args": array of arguments (for stdio)
+- "url": the URL (for http)
+- "env": object of environment variables needed (if any)
+
+Example response:
+{"name": "filesystem", "transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"], "env": {}}
+
+If you cannot determine the configuration, return: {"error": "reason"}
+
+README content:
+${truncated}`;
+
+    try {
+      const result = await provider.simpleChat(
+        this.selectedModelId,
+        [{ role: 'user', content: extractionPrompt }],
+        0.1,
+      );
+
+      // Parse the JSON from the LLM response
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        this.postMessage({ type: 'mcpInstallResult', error: 'LLM did not return valid configuration. Try adding the server manually.' } as any);
+        return;
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.error) {
+        this.postMessage({ type: 'mcpInstallResult', error: `Could not extract config: ${parsed.error}` } as any);
+        return;
+      }
+
+      const config: Record<string, unknown> = { timeout: 30000 };
+      if (parsed.transport === 'http' && parsed.url) {
+        config.url = parsed.url;
+      } else {
+        if (parsed.command) config.command = parsed.command;
+        if (parsed.args) config.args = parsed.args;
+      }
+      if (parsed.env && Object.keys(parsed.env).length > 0) {
+        config.env = parsed.env;
+      }
+
+      this.postMessage({
+        type: 'mcpInstallResult',
+        name: parsed.name || 'mcp-server',
+        config,
+      } as any);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ type: 'mcpInstallResult', error: `Failed to extract config: ${errMsg}` } as any);
     }
   }
 
@@ -1532,16 +1826,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const health = this.contextManager.getQuickHealth();
+    const breakdown = [...health.breakdown];
+
+    // Add MCP tools category if registry has data
+    if (this.mcpRegistry) {
+      const mcpTokens = this.mcpRegistry.estimateTokenUsage();
+      if (mcpTokens.loaded > 0 || mcpTokens.deferred > 0) {
+        const counts = this.mcpRegistry.getToolCount();
+        breakdown.push({
+          category: 'mcp_tools',
+          tokens: mcpTokens.loaded,
+          itemCount: counts.loaded,
+          avgRelevance: 1.0,
+        });
+      }
+    }
+
+    const totalWithMcp = breakdown.reduce((sum, b) => sum + b.tokens, 0);
     this.postMessage({
       type: 'contextMeterUpdate',
       data: {
-        totalTokens: health.totalTokens,
+        totalTokens: totalWithMcp,
         maxTokens: health.maxTokens,
-        utilization: health.utilization,
+        utilization: health.maxTokens > 0 ? Math.round((totalWithMcp / health.maxTokens) * 100) : 0,
         healthScore: health.healthScore,
         compressionRecommended: health.compressionRecommended,
         resetRecommended: health.resetRecommended,
-        breakdown: health.breakdown,
+        breakdown,
       },
     });
   }
@@ -2018,6 +2329,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!spawnAgentFn) throw new Error('Pipeline executor not ready');
         return spawnAgentFn(systemPrompt, task, model);
       },
+      mcpRegistry: this.mcpRegistry ?? undefined,
     });
 
     // Build skill tools if registry is available
@@ -2036,7 +2348,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    const allTools: ToolDefinition[] = [...coreTools, ...lspTools, ...extendedTools, ...skillTools];
+    // Include MCP tools: always-loaded + session-activated (from tool_search discovery)
+    const mcpAlwaysLoaded = this.mcpRegistry?.getAlwaysLoadedTools() ?? [];
+    const mcpActivated = this.mcpRegistry?.getActivatedTools() ?? [];
+    // Also include tools from the extension host (for servers without registry)
+    const mcpHostTools = this.mcpHost?.getMcpTools() ?? [];
+    // Deduplicate: registry tools take priority
+    const mcpRegistryNames = new Set([...mcpAlwaysLoaded, ...mcpActivated].map(t => t.name));
+    const mcpExtraTools = mcpHostTools.filter(t => !mcpRegistryNames.has(t.name));
+
+    const allTools: ToolDefinition[] = [
+      ...coreTools, ...lspTools, ...extendedTools, ...skillTools,
+      ...mcpAlwaysLoaded, ...mcpActivated, ...mcpExtraTools,
+    ];
 
     // Detect slash command invocation: /skill-name [args]
     // If the message starts with /, check if it matches a skill and prepend skill invocation

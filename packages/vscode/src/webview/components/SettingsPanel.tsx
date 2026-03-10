@@ -5,6 +5,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { postMessage } from '../vscode-api';
 import type { ModelInfo, MemoryModelConfig, MemoryAvailableProvider } from '@archon/core';
+import { McpSettingsPanel } from './McpSettingsPanel';
 
 interface Props {
   currentModel: string;
@@ -286,6 +287,11 @@ export function SettingsPanel({
             className="settings-input"
           />
         </div>
+      </section>
+
+      {/* MCP Servers */}
+      <section className="settings-section">
+        <McpSettingsPanel />
       </section>
 
       {/* OpenAI */}

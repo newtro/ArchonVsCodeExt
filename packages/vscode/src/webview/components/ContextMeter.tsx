@@ -27,6 +27,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   conversation: '#ef4444',
   current_turn: '#ec4899',
   reserved: '#374151',
+  mcp_tools: '#a855f7',
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -39,6 +40,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   conversation: 'Chat',
   current_turn: 'Turn',
   reserved: 'Reserved',
+  mcp_tools: 'MCP Tools',
 };
 
 function formatTokens(n: number): string {
