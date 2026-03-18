@@ -85,6 +85,8 @@ export function App() {
   const [activeProviderId, setActiveProviderId] = useState('openrouter');
   const [claudeCliPath, setClaudeCliPath] = useState('claude');
   const [claudeCliStatus, setClaudeCliStatus] = useState<{ installed: boolean; authenticated: boolean; version?: string; error?: string } | undefined>(undefined);
+  const [geminiCliPath, setGeminiCliPath] = useState('gemini');
+  const [geminiCliStatus, setGeminiCliStatus] = useState<{ installed: boolean; authenticated: boolean; version?: string; error?: string } | undefined>(undefined);
   const [mcpConfigPath, setMcpConfigPath] = useState('');
   const [openaiAuthStatus, setOpenaiAuthStatus] = useState<{ mode: string; authenticated: boolean; planType?: string; email?: string; error?: string } | undefined>(undefined);
   const [memoryModelConfig, setMemoryModelConfig] = useState<import('@archon/core').MemoryModelConfig | null>(null);
@@ -273,6 +275,9 @@ export function App() {
           if (msg.claudeCliPath) {
             setClaudeCliPath(msg.claudeCliPath);
           }
+          if (msg.geminiCliPath) {
+            setGeminiCliPath(msg.geminiCliPath);
+          }
           if (msg.mcpConfigPath) {
             setMcpConfigPath(msg.mcpConfigPath);
           }
@@ -294,6 +299,15 @@ export function App() {
 
         case 'claudeCliStatusResult':
           setClaudeCliStatus({
+            installed: msg.installed,
+            authenticated: msg.authenticated,
+            version: msg.version,
+            error: msg.error,
+          });
+          break;
+
+        case 'geminiCliStatusResult':
+          setGeminiCliStatus({
             installed: msg.installed,
             authenticated: msg.authenticated,
             version: msg.version,
@@ -1246,6 +1260,15 @@ export function App() {
           }}
           onCheckClaudeCliStatus={() => {
             postMessage({ type: 'setClaudeCliPath', path: claudeCliPath });
+          }}
+          geminiCliStatus={geminiCliStatus}
+          geminiCliPath={geminiCliPath}
+          onGeminiCliPathChange={(path) => {
+            setGeminiCliPath(path);
+            postMessage({ type: 'setGeminiCliPath', path });
+          }}
+          onCheckGeminiCliStatus={() => {
+            postMessage({ type: 'checkGeminiCliStatus' });
           }}
           mcpConfigPath={mcpConfigPath}
           onMcpConfigPathChange={(path) => {

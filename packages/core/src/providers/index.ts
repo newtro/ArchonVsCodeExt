@@ -20,6 +20,10 @@ export type {
   OpenAIAuthState,
   OpenAIAuthCallbacks,
 } from './openai-auth';
+export { GeminiCliProvider } from './gemini-cli-provider';
+export type { GeminiCliConfig } from './gemini-cli-provider';
 export { ProviderManager } from './provider-manager';
 export { detectClaudeCli } from './claude-cli-detector';
 export type { ClaudeCliStatus } from './claude-cli-detector';
+export { detectGeminiCli } from './gemini-cli-detector';
+export type { GeminiCliStatus } from './gemini-cli-detector';

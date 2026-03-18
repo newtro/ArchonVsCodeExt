@@ -22,8 +22,10 @@ import {
   OpenRouterProvider,
   ClaudeCliProvider,
   OpenAIProvider,
+  GeminiCliProvider,
   ProviderManager,
   detectClaudeCli,
+  detectGeminiCli,
   HookEngine,
   createHookBridge,
   getHookTemplates,
@@ -86,9 +88,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private openRouterProvider: OpenRouterProvider;
   private claudeCliProvider: ClaudeCliProvider;
   private openAIProvider: OpenAIProvider;
+  private geminiCliProvider: GeminiCliProvider;
   private agentLoop?: AgentLoop;
   private claudeCliSessionId: string | null = null;
   private claudeCliExecutor?: import('@archon/core').Executor;
+  private geminiCliSessionId: string | null = null;
+  private geminiCliExecutor?: import('@archon/core').Executor;
   private cliPendingUserAnswer: string | null = null;
   private cliAbortedForAskUser = false;
   private pipelineExecutor?: PipelineExecutor;
@@ -136,10 +141,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.openRouterProvider = new OpenRouterProvider({ apiKey: '' });
     this.claudeCliProvider = new ClaudeCliProvider();
     this.openAIProvider = new OpenAIProvider();
+    this.geminiCliProvider = new GeminiCliProvider();
     this.providerManager = new ProviderManager();
     this.providerManager.register(this.openRouterProvider);
     this.providerManager.register(this.claudeCliProvider);
     this.providerManager.register(this.openAIProvider);
+    this.providerManager.register(this.geminiCliProvider);
 
     // Restore saved OpenAI auth mode
     const savedOpenAIAuthMode = context.globalState.get<string>('archon.openaiAuthMode', 'api-key');
@@ -149,9 +156,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Restore saved provider preference
     const savedProvider = context.globalState.get<string>('archon.activeProvider', 'openrouter');
-    if (savedProvider === 'claude-cli' || savedProvider === 'openrouter' || savedProvider === 'openai') {
+    if (savedProvider === 'claude-cli' || savedProvider === 'openrouter' || savedProvider === 'openai' || savedProvider === 'gemini-cli') {
       try { this.providerManager.setActive(savedProvider as ProviderId); } catch { /* keep default */ }
     }
+    // Restore saved Gemini CLI path
+    const savedGeminiCliPath = context.globalState.get<string>('archon.geminiCliPath', 'gemini');
+    this.geminiCliProvider.setCliPath(savedGeminiCliPath);
+
     this.selectedModelId = context.globalState.get<string>('archon.selectedModelId', '');
     const savedLevel = context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict';
     this.securityManager = new SecurityManager({ level: savedLevel });
@@ -532,6 +543,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         { id: 'openrouter', provider: this.openRouterProvider, defaultModel: 'google/gemini-2.0-flash-001' },
         { id: 'openai', provider: this.openAIProvider, defaultModel: 'gpt-4.1-nano' },
         { id: 'claude-cli', provider: this.claudeCliProvider, defaultModel: 'claude-haiku-4-5-20251001' },
+        { id: 'gemini-cli', provider: this.geminiCliProvider, defaultModel: 'gemini-2.5-flash' },
       ];
       for (const { id, provider, defaultModel } of providers) {
         try {
@@ -600,6 +612,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'openrouter': return this.openRouterProvider;
       case 'openai': return this.openAIProvider;
       case 'claude-cli': return this.claudeCliProvider;
+      case 'gemini-cli': return this.geminiCliProvider;
       default: return null;
     }
   }
@@ -797,6 +810,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'cancelRequest':
         if (this.claudeCliExecutor) {
           this.claudeCliExecutor.abort();
+        } else if (this.geminiCliExecutor) {
+          this.geminiCliExecutor.abort();
         } else if (this.cliAbortedForAskUser || this.pendingAskUser.size > 0) {
           // Waiting for ask-user answer between CLI runs — cancel the wait
           for (const [id, pending] of this.pendingAskUser) {
@@ -845,6 +860,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.claudeCliExecutor?.abort();
         this.claudeCliExecutor = undefined;
         this.claudeCliSessionId = null;
+        this.geminiCliExecutor?.abort();
+        this.geminiCliExecutor = undefined;
+        this.geminiCliSessionId = null;
         this.cliPendingUserAnswer = null;
         this.cliAbortedForAskUser = false;
         // Auto-summarize session before clearing
@@ -895,8 +913,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const webSearchEnabled = this.context.globalState.get<boolean>('archon.webSearchEnabled', true);
         const activeProvider = this.providerManager.getActiveId();
         const cliPath = this.context.globalState.get<string>('archon.claudeCliPath', 'claude');
+        const geminiCliPath = this.context.globalState.get<string>('archon.geminiCliPath', 'gemini');
         const mcpPath = this.context.globalState.get<string>('archon.mcpConfigPath', '');
-        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled, activeProvider, claudeCliPath: cliPath, mcpConfigPath: mcpPath || undefined });
+        this.postMessage({ type: 'settingsLoaded', securityLevel: secLevel, archiveEnabled: archEnabled, modelPool: pool, hasBraveApiKey: !!braveKey, webSearchEnabled, activeProvider, claudeCliPath: cliPath, geminiCliPath, mcpConfigPath: mcpPath || undefined });
         break;
       }
       case 'setBraveApiKey':
@@ -1024,6 +1043,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.context.globalState.update('archon.claudeCliPath', msg.path);
         await this.sendProvidersList();
         break;
+      case 'setGeminiCliPath':
+        this.geminiCliProvider.setCliPath(msg.path);
+        this.context.globalState.update('archon.geminiCliPath', msg.path);
+        await this.sendProvidersList();
+        break;
+      case 'checkGeminiCliStatus': {
+        const geminiStatus = await detectGeminiCli(this.geminiCliProvider.getCliPath());
+        this.postMessage({
+          type: 'geminiCliStatusResult',
+          installed: geminiStatus.installed,
+          authenticated: geminiStatus.authenticated,
+          version: geminiStatus.version,
+          error: geminiStatus.error,
+        });
+        break;
+      }
       case 'setMcpConfigPath':
         this.context.globalState.update('archon.mcpConfigPath', msg.path || undefined);
         break;
@@ -1182,6 +1217,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           { id: 'openrouter', label: 'OpenRouter', provider: this.openRouterProvider },
           { id: 'openai', label: 'OpenAI', provider: this.openAIProvider },
           { id: 'claude-cli', label: 'Claude Code CLI', provider: this.claudeCliProvider },
+          { id: 'gemini-cli', label: 'Gemini CLI', provider: this.geminiCliProvider },
         ];
         for (const check of providerChecks) {
           try {
@@ -2166,6 +2202,22 @@ ${truncated}`;
       error: cliStatus.error,
     });
 
+    // Also send detailed Gemini CLI status
+    const geminiCliStatus = await detectGeminiCli(this.geminiCliProvider.getCliPath());
+    this.postMessage({
+      type: 'providerStatus',
+      providerId: 'gemini-cli',
+      available: geminiCliStatus.installed && geminiCliStatus.authenticated,
+      error: geminiCliStatus.error,
+    });
+    this.postMessage({
+      type: 'geminiCliStatusResult',
+      installed: geminiCliStatus.installed,
+      authenticated: geminiCliStatus.authenticated,
+      version: geminiCliStatus.version,
+      error: geminiCliStatus.error,
+    });
+
     // Also send OpenAI auth status
     this.sendOpenAIAuthStatus();
   }
@@ -2185,6 +2237,11 @@ ${truncated}`;
         // with --resume so the CLI has conversational context.
         this.claudeCliExecutor.abort();
         this.claudeCliExecutor = undefined;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } else if (this.geminiCliExecutor) {
+        // Gemini CLI — same pattern as Claude CLI
+        this.geminiCliExecutor.abort();
+        this.geminiCliExecutor = undefined;
         await new Promise(resolve => setTimeout(resolve, 100));
       } else if (this.pipelineExecutor) {
         const injected = this.pipelineExecutor.injectUserMessage(content);
@@ -2547,6 +2604,91 @@ ${truncated}`;
           this.triggerAutoSummarize();
           this.postMessage({ type: 'agentLoopDone' });
         }
+      }
+      return;
+    }
+
+    // ── Gemini CLI execution path ──
+    if (activeProviderId === 'gemini-cli') {
+      const secLevel = this.context.globalState.get<string>('archon.securityLevel', 'standard') as 'yolo' | 'permissive' | 'standard' | 'strict';
+      const geminiSystemPrompt = await this.buildSystemPromptWithMemory(workspaceRoot, content, { skipSkills: true });
+      const executor = this.geminiCliProvider.createExecutor({
+        model: this.selectedModelId,
+        systemPrompt: geminiSystemPrompt,
+        tools: allTools,
+        toolContext,
+        temperature: undefined,
+        webSearch: webSearchEnabled,
+        securityLevel: secLevel,
+        workspaceRoot,
+        sessionId: this.geminiCliSessionId ?? undefined,
+      });
+
+      this.geminiCliExecutor = executor;
+      this.isRunning = true;
+
+      try {
+        await executor.run(content, {
+          onToken: (token: StreamToken) => this.postMessage({ type: 'streamToken', token }),
+          onToolCall: (tc: ToolCall) => {
+            this.postMessage({ type: 'toolCallStart', toolCall: tc });
+
+            // Intercept TodoWrite calls to update the todo widget
+            if (tc.name === 'TodoWrite' && tc.arguments?.todos) {
+              const todos = (tc.arguments.todos as Array<{ content: string; status: string }>).map((t, i) => ({
+                id: `gemini-todo-${i}`,
+                content: t.content,
+                status: (t.status === 'pending' ? 'pending' : t.status === 'in_progress' ? 'in_progress' : t.status === 'completed' ? 'completed' : t.status) as import('@archon/core').TodoStatus,
+              }));
+              this.currentTodoList = {
+                title: tc.arguments.title as string | undefined,
+                items: todos,
+                turnId: Date.now().toString(36),
+                startedAt: this.currentTodoList?.startedAt ?? Date.now(),
+              };
+              this.postMessage({ type: 'todosUpdated', title: tc.arguments.title as string | undefined, todos });
+              this.updateTodoStatusBar(todos);
+            }
+          },
+          onToolResult: (result: ToolResult) => {
+            this.postMessage({ type: 'toolCallResult', result });
+            if (this.contextManager) {
+              this.contextManager.addMessage('tool', result.content.slice(0, 2000));
+              this.sendContextMeterUpdate();
+              this.checkAutoCompaction().catch(() => {});
+            }
+            if (this.interactionArchive) {
+              this.interactionArchive.add('tool_result', result.content.slice(0, 1000), {
+                toolName: result.toolCallId,
+              });
+            }
+          },
+          onMessageComplete: (msg: ChatMessage) => {
+            this.postMessage({ type: 'messageComplete', message: msg });
+            if (msg.role === 'assistant' && this.contextManager) {
+              this.contextManager.addMessage('assistant', msg.content);
+              this.sendContextMeterUpdate();
+              this.checkAutoCompaction().catch(() => {});
+            }
+            if (msg.role === 'assistant' && this.interactionArchive) {
+              this.interactionArchive.add('assistant_message', msg.content);
+            }
+          },
+        });
+        // Persist session ID for --resume on subsequent messages
+        const sid = executor.getSessionId?.();
+        if (sid) {
+          this.geminiCliSessionId = sid;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.postMessage({ type: 'error', error: msg });
+      } finally {
+        this.geminiCliExecutor = undefined;
+        this.isRunning = false;
+        this.finalizeTodos();
+        this.triggerAutoSummarize();
+        this.postMessage({ type: 'agentLoopDone' });
       }
       return;
     }

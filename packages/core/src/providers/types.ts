@@ -31,7 +31,7 @@ export interface TokenUsage {
 
 // ── Provider Interface ──
 
-export type ProviderId = 'openrouter' | 'claude-cli' | 'openai';
+export type ProviderId = 'openrouter' | 'claude-cli' | 'openai' | 'gemini-cli';
 
 export interface LLMProvider {
   readonly id: ProviderId;

@@ -25,6 +25,10 @@ interface Props {
   claudeCliPath: string;
   onClaudeCliPathChange: (path: string) => void;
   onCheckClaudeCliStatus: () => void;
+  geminiCliStatus?: { installed: boolean; authenticated: boolean; version?: string; error?: string };
+  geminiCliPath: string;
+  onGeminiCliPathChange: (path: string) => void;
+  onCheckGeminiCliStatus: () => void;
   mcpConfigPath: string;
   onMcpConfigPathChange: (path: string) => void;
   openaiAuthStatus?: { mode: string; authenticated: boolean; planType?: string; email?: string; error?: string };
@@ -51,6 +55,10 @@ export function SettingsPanel({
   claudeCliPath,
   onClaudeCliPathChange,
   onCheckClaudeCliStatus,
+  geminiCliStatus,
+  geminiCliPath,
+  onGeminiCliPathChange,
+  onCheckGeminiCliStatus,
   mcpConfigPath,
   onMcpConfigPathChange,
   openaiAuthStatus,
@@ -287,6 +295,53 @@ export function SettingsPanel({
             className="settings-input"
           />
         </div>
+      </section>
+
+      {/* Gemini CLI */}
+      <section className="settings-section">
+        <h4>Gemini CLI</h4>
+        <p className="settings-hint">
+          Use Google Gemini models through the official Gemini CLI.
+          Free tier: 1,000 requests/day with a Google account.
+          Install with <code>npm install -g @google/gemini-cli</code>.
+        </p>
+        <div className="settings-notice" style={{
+          padding: '8px 12px',
+          marginBottom: '8px',
+          border: '1px solid var(--vscode-editorWarning-foreground, #cca700)',
+          borderRadius: '4px',
+          fontSize: '12px',
+          lineHeight: '1.4',
+          opacity: 0.9,
+        }}>
+          <strong>Terms of Service Notice:</strong> Google's ToS prohibits third-party tools
+          from directly accessing the services powering Gemini CLI. While this extension
+          spawns the official CLI binary (not extracting tokens), this usage falls in a gray area.
+          Google has banned accounts for using unofficial tools with Gemini CLI authentication.
+          By using this provider, you acknowledge this risk.{' '}
+          <a href="https://geminicli.com/docs/resources/tos-privacy/" target="_blank" rel="noopener">
+            Read the full ToS
+          </a>
+        </div>
+        <div className="settings-row">
+          <input
+            type="text"
+            value={geminiCliPath}
+            onChange={(e) => onGeminiCliPathChange(e.target.value)}
+            placeholder="gemini (or full path)"
+            className="settings-input"
+          />
+          <button onClick={onCheckGeminiCliStatus} className="settings-btn">Check</button>
+        </div>
+        {geminiCliStatus && (
+          <div className={`cli-status ${geminiCliStatus.installed && geminiCliStatus.authenticated ? 'cli-status-ok' : 'cli-status-warn'}`}>
+            {geminiCliStatus.installed
+              ? geminiCliStatus.authenticated
+                ? `Connected${geminiCliStatus.version ? ` (v${geminiCliStatus.version})` : ''}`
+                : 'Installed but not authenticated. Run: gemini (and follow login prompts)'
+              : geminiCliStatus.error ?? 'Not found. Install with: npm install -g @google/gemini-cli'}
+          </div>
+        )}
       </section>
 
       {/* MCP Servers */}
