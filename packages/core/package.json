@@ -12,7 +12,7 @@
     "test": "echo 'no tests yet'"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@openrouter/sdk": "^0.9.11",
     "zod": "^4.3.6"
   },
